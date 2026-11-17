@@ -106,7 +106,7 @@ table.rec td:first-child,table.rec th:first-child{text-align:left}
 'use strict';
 /* ================= Boardwalk Rivals — core ================= */
 const BR = {}; window.BR = BR;
-BR.VERSION = '1.0 · Wave 1';
+BR.VERSION = '2.0 · Wave 2';
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -121,14 +121,17 @@ BR.util = { clamp, lerp, rnd, ri, pick, shuffle, rrect, esc };
 
 /* ================= Save (versioned schema) ================= */
 const SAVE_KEY = 'boardwalk-rivals-save';
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 function statBlock() { return { played: 0, ai: { easy: { w: 0, l: 0, d: 0 }, medium: { w: 0, l: 0, d: 0 }, hard: { w: 0, l: 0, d: 0 } }, local: { p1: 0, p2: 0, d: 0 }, best: 0 }; }
 function saveDefaults() {
   let rm = false; try { rm = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { }
-  return { v: SAVE_VERSION, tickets: 0, lifetime: 0, owned: {}, chars: {}, decor: {}, stats: {}, rivals: {}, h2h: { p1: 0, p2: 0, d: 0 }, names: ['Player 1', 'Player 2'], setup: {}, settings: { master: 0.8, music: 0.5, sfx: 0.85, rumble: true, reduced: rm }, flags: {} };
+  return { v: SAVE_VERSION, tickets: 0, lifetime: 0, owned: {}, chars: {}, decor: {}, stats: {}, rivals: {}, h2h: { p1: 0, p2: 0, d: 0 }, names: ['Player 1', 'Player 2'], setup: {}, seen: {}, settings: { master: 0.8, music: 0.5, sfx: 0.85, rumble: true, reduced: rm }, flags: {} };
 }
 /* Later waves: add BR.MIGRATIONS[n] = s => { ...; s.v = n + 1; return s; } and bump SAVE_VERSION. Unknown keys are always preserved. */
-BR.MIGRATIONS = {};
+BR.MIGRATIONS = {
+  /* v1 (wave 1) -> v2 (wave 2): adds the seen-booth map for NEW signs; everything else carries over untouched */
+  1: s => { if (!isObj(s.seen)) s.seen = {}; for (const k in (isObj(s.stats) ? s.stats : {})) s.seen[k] = true; s.v = 2; return s; }
+};
 function isObj(o) { return !!o && typeof o === 'object' && !Array.isArray(o); }
 function fillDefaults(d, s) {
   for (const k in d) {
@@ -616,6 +619,7 @@ BR.startGame = function (id, cfg) {
     aiChar(seat) { return this.players[seat] && this.players[seat].char; },
     end(winner, info) { endSession(this, winner, info || {}); }
   };
+  if (def.wave > 1 && !S().seen[id]) { S().seen[id] = true; Save.write(); }
   App.session = session; App.state = 'game'; UI.closeAll(); BR.hideQuip();
   App.game = def.create(session); if (App.game.resize) App.game.resize(W, H);
   Snd.setMood('game'); setHUD();
@@ -785,7 +789,8 @@ function openSettings() {
     '<h3>Controls</h3><div class="howto"><ul>' +
     '<li><b>Xbox controller:</b> Left stick / D-pad move · <span class="kbd">A</span> select · <span class="kbd">B</span> back · <span class="kbd">Y</span> rotate/extra · <span class="kbd">LB</span>/<span class="kbd">RB</span> jump booths · <span class="kbd">Start</span> pause. Two controllers = one each in Mano a Mano.</li>' +
     '<li><b>Keyboard:</b> Arrows or WASD move · <span class="kbd">Enter</span>/<span class="kbd">Space</span> select · <span class="kbd">Esc</span> pause/back. Real-time 2P: Player 1 WASD, Player 2 arrows.</li>' +
-    '<li><b>Touch / mouse:</b> tap to choose, drag to aim or move. Air Hockey splits the screen: each player owns a half.</li></ul></div>' +
+    '<li><b>Touch / mouse:</b> tap to choose, drag to aim or move. Air Hockey, Pong, Tank Duel and Whack-a-Mole split the screen: each player owns a half.</li>' +
+    '<li><b>Tank Duel:</b> stick drives, <span class="kbd">A</span>/<span class="kbd">RT</span> fires (P1 Space, P2 Enter; touch: drag to drive, tap to fire). <b>Whack-a-Mole:</b> point the stick at a hole and press <span class="kbd">A</span> (P1 Q-W-E/A-S-D/Z-X-C, P2 U-I-O/J-K-L/M-,-.).</li></ul></div>' +
     '<h3>Progress</h3><div class="row"><button class="btn" data-a="reset">Reset all progress</button></div>' +
     '<div class="row c" style="margin-top:12px"><button class="btn go" data-a="back" data-default>Done</button></div>';
   let armed = false;
@@ -862,7 +867,7 @@ function openPause() {
   UI.open('<h2>Paused</h2><p class="tag">' + esc(def.name) + '</p><div class="row c" style="flex-direction:column;align-items:stretch">' +
     '<button class="btn go" data-a="back" data-default>Resume</button><button class="btn" data-a="how">How to play</button><button class="btn" data-a="set">Settings</button><button class="btn" data-a="restart">Restart</button>' + (canResign ? '<button class="btn" data-a="resign">Resign this game</button>' : '') + '<button class="btn" data-a="quit">Quit to boardwalk</button></div>',
     { cls: 'small', acts: { how: () => openHowTo(def), set: () => openSettings(), restart: () => { const s = App.session; BR.startGame(s.id, s.cfg); }, quit: () => { BR.endSession(); goHub(); },
-      resign: () => { const s = App.session, g = App.game; const seat = s.mode === 'ai' ? s.humanSeat : (g.seat ? g.seat() : g.me ? g.me() : (g.turn || 0)); UI.closeAll(); s.end(1 - seat, { detail: s.players[seat].name + ' resigned' }); } } });
+      resign: () => { const s = App.session, g = App.game; let seat = s.mode === 'ai' ? s.humanSeat : (g.seat ? g.seat() : g.me ? g.me() : (g.turn || 0)); if (!s.players[seat]) seat = 0; UI.closeAll(); s.end(1 - seat, { detail: s.players[seat].name + ' resigned' }); } } });
 }
 BR.pause = openPause;
 function openHubMenu() {
@@ -1982,6 +1987,1091 @@ BR.registerGame({
   icon(c, x, y, s) { c.fillStyle = '#1b7fbf'; rrect(c, x - s * .75, y - s * .6, s * 1.5, s * 1.2, 8); c.fill(); c.fillStyle = '#9aa7b1'; rrect(c, x - s * .55, y - s * .05, s * 1.1, s * .3, s * .15); c.fill(); c.fillRect(x - s * .15, y - s * .25, s * .3, s * .2); c.fillStyle = '#ff4f3a'; c.beginPath(); c.arc(x + s * .4, y - s * .35, s * .12, 0, TAU); c.fill(); c.fillStyle = '#fff'; c.beginPath(); c.arc(x - s * .45, y - s * .35, s * .08, 0, TAU); c.fill(); },
   create: s => new Battleship(s)
 });
+/* ================= Backgammon ================= */
+/* absolute board b[0..23]: + = seat 0 checkers (moves 23 -> 0, home 0-5), - = seat 1 (moves 0 -> 23, home 18-23).
+   "views" are normalized for the side to move: my checkers +, I move from 24 (bar) down to -1 (off). */
+const BG_SHOT = [0, 11, 12, 14, 15, 15, 17, 6, 6, 5, 3, 2, 3];
+function bgStart() { const b = Array(24).fill(0); b[23] = 2; b[12] = 5; b[7] = 3; b[5] = 5; b[0] = -2; b[11] = -5; b[16] = -3; b[18] = -5; return b; }
+function bgView(st, me) { const b = Array(24); for (let p = 0; p < 24; p++) b[p] = me ? -st.b[23 - p] : st.b[p]; return { b, bar: st.bar[me], obar: st.bar[1 - me], off: st.off[me], ooff: st.off[1 - me] }; }
+function bgUnview(v, me, st) { const b = Array(24); for (let p = 0; p < 24; p++) b[me ? 23 - p : p] = me ? -v.b[p] : v.b[p]; const bar = [0, 0], off = [0, 0]; bar[me] = v.bar; bar[1 - me] = v.obar; off[me] = v.off; off[1 - me] = v.ooff; return Object.assign({}, st, { b, bar, off }); }
+function bgFlip(v) { const b = Array(24); for (let p = 0; p < 24; p++) b[p] = -v.b[23 - p]; return { b, bar: v.obar, obar: v.bar, off: v.ooff, ooff: v.off }; }
+function bgCopy(v) { return { b: v.b.slice(), bar: v.bar, obar: v.obar, off: v.off, ooff: v.ooff }; }
+function bgHome(v) { if (v.bar) return false; for (let p = 6; p < 24; p++) if (v.b[p] > 0) return false; return true; }
+function bgSingles(v, d) {
+  const r = [];
+  if (v.bar) { const t = 24 - d; if (v.b[t] >= -1) r.push([24, t, d]); return r; }
+  const home = bgHome(v); let hi = -1; for (let p = 23; p >= 0; p--) if (v.b[p] > 0) { hi = p; break; }
+  for (let p = 0; p < 24; p++) { if (v.b[p] <= 0) continue; const t = p - d; if (t >= 0) { if (v.b[t] >= -1) r.push([p, t, d]); } else if (home && (t === -1 || p === hi)) r.push([p, -1, d]); }
+  return r;
+}
+function bgApply(v, m) { const [f, t] = m; if (f === 24) v.bar--; else v.b[f]--; if (t < 0) v.off++; else { if (v.b[t] === -1) { v.b[t] = 0; v.obar++; } v.b[t]++; } return v; }
+function bgKey(v) { return v.b.join(',') + '|' + v.bar + '|' + v.obar + '|' + v.off; }
+/* every legal full play (max dice used, larger die if only one can be used) */
+function bgSeqs(v, dice) {
+  const leaves = []; const ds = dice[0] === dice[1] ? [dice[0], dice[0], dice[0], dice[0]] : dice.slice(); let cap = 0;
+  (function dfs(cur, rem, seq) {
+    if (++cap > 60000) return; let any = false; const tried = {};
+    for (let i = 0; i < rem.length; i++) { const d = rem[i]; if (tried[d]) continue; tried[d] = 1; const ms = bgSingles(cur, d); for (const m of ms) { any = true; const nr = rem.slice(); nr.splice(i, 1); dfs(bgApply(bgCopy(cur), m), nr, seq.concat([m])); } }
+    if (!any) leaves.push({ seq, v: cur });
+  })(v, ds, []);
+  let mx = 0; for (const l of leaves) mx = Math.max(mx, l.seq.length); let out = leaves.filter(l => l.seq.length === mx);
+  if (mx === 1 && dice[0] !== dice[1]) { const big = Math.max(dice[0], dice[1]); if (out.some(l => l.seq[0][2] === big)) out = out.filter(l => l.seq[0][2] === big); }
+  if (mx === 0) return [];
+  return out;
+}
+function bgPip(v) { let a = v.bar * 25, o = v.obar * 25; for (let p = 0; p < 24; p++) { if (v.b[p] > 0) a += v.b[p] * (p + 1); else if (v.b[p] < 0) o += -v.b[p] * (24 - p); } return [a, o]; }
+function bgSide(v) {
+  let s = 0, run = 0, best = 0, homePts = 0;
+  for (let p = 0; p < 24; p++) {
+    const n = v.b[p];
+    if (n >= 2) { s += 2; if (p <= 5) { s += 3; homePts++; } if (p === 4 || p === 5 || p === 6) s += 2; if (p >= 18) s += 2; run++; best = Math.max(best, run); if (n > 4) s -= (n - 4); }
+    else run = 0;
+    if (n === 1) { let miss = 1; if (v.obar && p <= 11) miss *= 1 - BG_SHOT[Math.min(12, p + 1)] / 36; for (let q = 0; q < p; q++) if (v.b[q] < 0) { const d = p - q; if (d <= 12) miss *= Math.pow(1 - BG_SHOT[d] / 36, Math.min(2, -v.b[q])); } s -= (1 - miss) * (24 - p + 6) * .55; }
+  }
+  if (best >= 2) s += best * best * .8;
+  return s + v.obar * (4 + homePts * 2) - v.bar * 4;
+}
+function bgEval(v) {
+  const [pm, po] = bgPip(v); let myRear = v.bar ? 24 : -1, oRear = v.obar ? -1 : 24;
+  for (let p = 23; p >= 0; p--) if (v.b[p] > 0) { myRear = Math.max(myRear, p); break; }
+  if (!v.obar) for (let p = 0; p < 24; p++) if (v.b[p] < 0) { oRear = p; break; }
+  const race = (po - pm) + (v.off - v.ooff) * 1.5;
+  if (myRear <= oRear) return race * 1.3 + v.off * .5;
+  return race + bgSide(v) - bgSide(bgFlip(v));
+}
+const BG_ROLLS = []; for (let a = 1; a <= 6; a++) for (let b = a; b <= 6; b++) BG_ROLLS.push([a, b, a === b ? 1 : 2]);
+function bgWinProb(v) { const [pm, po] = bgPip(v), race = po - pm, pos = clamp(bgEval(v) - race, -25, 25); const lead = race + 4 + pos * .4, scale = .12 * (pm + po) / 2 + 6; return 1 / (1 + Math.exp(-1.7 * lead / scale)); }
+const BGCOL = ['#fdf6e6', '#c0392b'];
+class Backgammon extends TurnGame {
+  constructor(s) {
+    super(s); this.cubeOn = s.opts.cube !== 'off';
+    this.st = { b: bgStart(), bar: [0, 0], off: [0, 0], turn: 0 };
+    this.cube = 1; this.owner = -1; this.dice = []; this.used = []; this.phase = 'open'; this.seqs = null; this.done = []; this.sel = null; this.cur = { x: 12, y: 1 }; this.wait = .6; this.moving = null; this.msgT = 0;
+    let a, b; do { a = 1 + ri(6); b = 1 + ri(6); } while (a === b); this.openDice = [a, b];
+  }
+  seat() { return this.st.turn; }
+  humanTurn() { return !this.s.over && !this.anim && !this.moving && this.wait <= 0 && !this.cubeWait && this.k.isHuman(this.st.turn) && (this.phase === 'move' || this.phase === 'roll'); }
+  canDouble() { return this.cubeOn && this.cube < 64 && (this.owner === -1 || this.owner === this.st.turn); }
+  resize(W, H) { const top = BR.HUD_H + 8, aw = W - 20, ah = H - top - 14; const u = Math.min(aw / 14.6, ah / 11.2); this.u = u; this.bw = u * 14.6; this.bh = u * 11.2; this.bx = (W - this.bw) / 2; this.by = top + (ah - this.bh) / 2; }
+  colX(col) { const u = this.u; return this.bx + u * .3 + col * u + (col >= 6 ? u : 0) + u / 2; }
+  ptPos(i) { const u = this.u; if (i >= 12) return { x: this.colX(i - 12), top: true, y0: this.by + u * .3 }; return { x: this.colX(11 - i), top: false, y0: this.by + this.bh - u * .3 }; }
+  checkerXY(i, k) { const P = this.ptPos(i), u = this.u, kk = Math.min(k, 4); return [P.x, P.top ? P.y0 + u * .48 + kk * u * .9 : P.y0 - u * .48 - kk * u * .9]; }
+  barXY(seat, k) { const u = this.u, x = this.bx + u * .3 + 6 * u + u / 2; return [x, seat === 0 ? this.by + this.bh / 2 - u * .9 - Math.min(k, 3) * u * .9 : this.by + this.bh / 2 + u * .9 + Math.min(k, 3) * u * .9]; }
+  trayXY(seat) { const u = this.u; return [this.bx + u * 13.3 + u * .65, seat === 0 ? this.by + this.bh - u * 2.6 : this.by + u * 2.6]; }
+  /* absolute <-> normalized for the side to move */
+  n2a(p) { if (p === 24 || p < 0) return p; return this.st.turn ? 23 - p : p; }
+  a2n(p) { if (p === 24 || p < 0) return p; return this.st.turn ? 23 - p : p; }
+  posXY(a, seat) { if (a === 24) return this.barXY(seat, 0); if (a < 0) return this.trayXY(seat); return this.checkerXY(a, Math.max(0, Math.abs(this.st.b[a]) - 1)); }
+  /* cursor columns: 0-5 points, 6 bar, 7-12 points, 13 tray; rows 0 top / 1 bottom */
+  curToPos(x, y) { if (x === 6) return 24; if (x === 13) return -1; const col = x > 6 ? x - 1 : x; return y === 0 ? 12 + col : 11 - col; }
+  posAt(px, py) {
+    const u = this.u; if (px < this.bx || px > this.bx + this.bw || py < this.by || py > this.by + this.bh) return null;
+    const rx = px - this.bx - u * .3; let col = Math.floor(rx / u); const top = py < this.by + this.bh / 2;
+    if (col === 6) return 24; if (col >= 13) return -1; if (col > 6) col -= 1; if (col < 0 || col > 11) return null; return top ? 12 + col : 11 - col;
+  }
+  legalSteps() { if (!this.seqs) return []; const n = this.done.length; const out = []; const seen = {}; for (const l of this.seqs) { if (l.seq.length <= n) continue; let ok = true; for (let i = 0; i < n; i++) { const a = l.seq[i], b = this.done[i]; if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) { ok = false; break; } } if (!ok) continue; const m = l.seq[n], k = m.join(','); if (!seen[k]) { seen[k] = 1; out.push(m); } } return out; }
+  /* destinations from a normalized source, including chained moves of the same checker */
+  destsFrom(src) {
+    const res = new Map(); const n = this.done.length;
+    for (const l of this.seqs || []) {
+      let ok = l.seq.length > n; for (let i = 0; ok && i < n; i++) { const a = l.seq[i], b = this.done[i]; if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) ok = false; } if (!ok) continue;
+      let pos = src, path = [];
+      for (let i = n; i < l.seq.length; i++) { const m = l.seq[i]; if (m[0] !== pos) break; path = path.concat([m]); pos = m[1]; if (!res.has(pos) || res.get(pos).length > path.length || (res.get(pos).length === path.length && path[path.length - 1][2] < res.get(pos)[path.length - 1][2])) res.set(pos, path); if (pos < 0) break; }
+    }
+    return res;
+  }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < (f.d || 1));
+    if (this.s.over) return;
+    if (this.moving) { this.moving.t += dt / (this.s.fast ? .02 : .22); if (this.moving.t >= 1) { const m = this.moving; this.moving = null; m.done(); } return; }
+    if (this.wait > 0) { this.wait -= this.s.fast ? dt * 20 : dt; return; }
+    if (this.cubeWait) return;
+    const seat = this.st.turn, human = this.k.isHuman(seat);
+    if (this.phase === 'open') { this.dice = this.openDice.slice(); const first = this.dice[0] > this.dice[1] ? 0 : 1; this.st.turn = first; BR.toast((this.s.players[first].human && this.s.mode === 'ai' ? 'You go' : this.s.players[first].name + ' goes') + ' first: ' + this.dice[0] + ' vs ' + this.dice[1]); Snd.play('roll'); this.beginMove(); return; }
+    if (this.phase === 'roll') {
+      if (human) { const n = this.k.nav(seat); if (n.a) this.roll(); else if (n.y && this.canDouble()) this.offerDouble(); return; }
+      if (!this.k.thinking) this.k.ai(() => this.canDouble() && this.aiWantsDouble(seat) ? 'double' : 'roll', a => { if (this.phase !== 'roll') return; a === 'double' ? this.offerDouble() : this.roll(); }, 350);
+      return;
+    }
+    if (this.phase === 'move') {
+      if (human) this.humanInput(this.k.nav(seat), seat);
+      else if (!this.k.thinking) this.k.ai(() => this.aiPick(seat, this.s.players[seat].diff), seq => { if (seq) this.playSeq(seq.slice()); }, 500);
+    }
+  }
+  roll() { this.dice = [1 + ri(6), 1 + ri(6)]; Snd.play('roll'); this.s.rumble(this.st.turn, 60, .2, .3); this.beginMove(); }
+  beginMove() {
+    this.phase = 'move'; const v = bgView(this.st, this.st.turn); this.seqs = bgSeqs(v, this.dice); this.done = []; this.sel = null; this.base = JSON.parse(JSON.stringify(this.st));
+    if (!this.seqs.length) { BR.toast('No legal moves: ' + this.dice.join('-')); this.wait = 1.1; this.passNext = true; this.phase = 'pass'; this.k.timers.push(setTimeout(() => { if (!this.s.dead && this.phase === 'pass') this.endTurn(); }, this.s.fast ? 20 : 1100)); return; }
+    if (this.k.isHuman(this.st.turn)) { const st = this.legalSteps(); if (st.length) { const a = this.n2a(st[0][0]); this.setCurTo(a); } }
+  }
+  setCurTo(a) { if (a === 24) { this.cur = { x: 6, y: this.st.turn ? 1 : 0 }; return; } if (a < 0) { this.cur = { x: 13, y: this.st.turn ? 0 : 1 }; return; } if (a >= 12) { const col = a - 12; this.cur = { x: col >= 6 ? col + 1 : col, y: 0 }; } else { const col = 11 - a; this.cur = { x: col >= 6 ? col + 1 : col, y: 1 }; } }
+  endTurn() { this.st.turn ^= 1; this.phase = 'roll'; this.dice = []; this.seqs = null; this.done = []; this.sel = null; if (!this.canDouble()) { this.phase = 'autoroll'; this.k.timers.push(setTimeout(() => { if (!this.s.dead && this.phase === 'autoroll') { this.phase = 'roll'; this.roll(); } }, this.s.fast ? 10 : 450)); } }
+  /* animate one normalized step, then continue */
+  step(m, after) {
+    const me = this.st.turn, fromA = this.n2a(m[0]), toA = this.n2a(m[1]);
+    const [x0, y0] = fromA === 24 ? this.barXY(me, Math.max(0, this.st.bar[me] - 1)) : this.checkerXY(fromA, Math.max(0, Math.abs(this.st.b[fromA]) - 1));
+    let x1, y1; if (toA < 0) [x1, y1] = this.trayXY(me); else [x1, y1] = this.checkerXY(toA, this.st.b[toA] * (me ? -1 : 1) > 0 ? Math.abs(this.st.b[toA]) : 0);
+    const v = bgView(this.st, me); const hit = m[1] >= 0 && v.b[m[1]] === -1; if (fromA === 24) this.st.bar[me]--; else this.st.b[fromA] += me ? 1 : -1;
+    this.moving = { x0, y0, x1, y1, t: 0, seat: me, done: () => { bgApply(v, m); this.st = bgUnview(v, me, this.st); Snd.play(hit ? 'capture' : 'clack'); if (hit) { this.s.rumble(me, 150, .6, .4); this.s.rumble(1 - me, 250, .9, .5); this.burst(x1, y1, '#ffd166', 14); this.s.quip(this.s.players[me].human ? 'bad' : 'good', null, .4); } if (toA < 0) Snd.play('coin'); after(); } };
+  }
+  playSeq(seq) { const go = () => { if (!seq.length) { this.finishTurn(); return; } const m = seq.shift(); this.done.push(m); this.step(m, go); }; go(); }
+  finishTurn() {
+    const me = this.st.turn;
+    if (this.st.off[me] >= 15) { const opp = 1 - me, ov = bgView(this.st, opp); let mult = 1, kind = ''; if (this.st.off[opp] === 0) { mult = 2; kind = 'Gammon! '; let back = ov.bar > 0; for (let p = 18; p < 24; p++) if (ov.b[p] > 0) back = true; if (back) { mult = 3; kind = 'Backgammon!! '; } } const pts = mult * this.cube; this.s.end(me, { detail: kind + pts + ' point' + (pts > 1 ? 's' : '') + (this.cube > 1 ? ' (cube ' + this.cube + ')' : ''), bonus: (pts - 1) * 3, bonusLocal: pts - 1 }); return; }
+    this.endTurn();
+  }
+  humanInput(n, seat) {
+    if (n.b && this.done.length && !this.moving) { this.undo(); return; }
+    if (n.dx) { this.cur.x = clamp(this.cur.x + n.dx, 0, 13); Snd.play('move'); }
+    if (n.dy) { this.cur.y = clamp(this.cur.y + n.dy, 0, 1); Snd.play('move'); }
+    if (n.a) this.clickPos(this.curToPos(this.cur.x, this.cur.y));
+  }
+  undo() { this.st = JSON.parse(JSON.stringify(this.base)); this.done = []; this.sel = null; Snd.play('back'); }
+  clickPos(a) {
+    if (a == null || this.phase !== 'move') return; const me = this.st.turn; const np = this.a2n(a);
+    const sources = new Set(this.legalSteps().map(m => m[0]));
+    if (this.sel != null) {
+      const ds = this.destsFrom(this.sel); const target = np < 0 ? -1 : np;
+      if (ds.has(target)) { const path = ds.get(target); this.sel = null; const go = () => { if (!path.length) { if (!this.legalSteps().length) this.finishTurn(); else { const st = this.legalSteps(); if (st.length === 1 || st.every(m => m[0] === st[0][0])) this.setCurTo(this.n2a(st[0][0])); } return; } const m = path.shift(); this.done.push(m); this.step(m, go); }; go(); return; }
+      if (np === this.sel) { this.sel = null; Snd.play('back'); return; }
+    }
+    if (sources.has(np)) { this.sel = np; Snd.play('select'); const ds = [...this.destsFrom(np).keys()]; if (ds.length) this.setCurTo(this.n2a(ds.sort((x, y) => y - x)[0])); return; }
+    Snd.play('error');
+  }
+  pointer(type, p) {
+    if (type !== 'down' || !this.u) return;
+    if (this.phase === 'roll' && this.humanTurn()) { const b = this.btns(); if (b.roll && Math.hypot(p.x - b.roll[0], p.y - b.roll[1]) < this.u * 1.3) { this.roll(); return; } if (b.dbl && Math.hypot(p.x - b.dbl[0], p.y - b.dbl[1]) < this.u * 1.1) { this.offerDouble(); return; } return; }
+    if (!this.humanTurn()) return;
+    if (this.done.length) { const b = this.btns(); if (b.undo && Math.hypot(p.x - b.undo[0], p.y - b.undo[1]) < this.u * .9) { this.undo(); return; } }
+    const a = this.posAt(p.x, p.y); if (a == null) return; this.setCurTo(a); this.clickPos(a);
+  }
+  btns() { const u = this.u, cy = this.by + this.bh / 2, lx = this.bx + u * .3 + 3 * u, rx = this.bx + u * .3 + 10 * u; const side = this.st.turn === 0 ? rx : lx; return { roll: [side, cy], dbl: this.canDouble() ? [side + (this.st.turn === 0 ? -1 : 1) * u * 2.4, cy] : null, undo: [side + (this.st.turn === 0 ? 1 : -1) * u * 2.4, cy] }; }
+  /* doubling cube */
+  offerDouble() {
+    if (!this.canDouble() || this.phase !== 'roll') return; const me = this.st.turn, opp = 1 - me; this.cubeWait = true; Snd.play('check');
+    const resolve = take => { this.cubeWait = false; if (take) { this.cube *= 2; this.owner = opp; BR.toast('Double taken! Cube at ' + this.cube); Snd.play('select'); this.roll(); } else { this.s.end(me, { detail: 'Double declined · ' + this.cube + ' point' + (this.cube > 1 ? 's' : ''), bonus: (this.cube - 1) * 3, bonusLocal: this.cube - 1 }); } };
+    if (this.k.isHuman(opp)) {
+      const nm = this.s.players[opp].name, by = this.s.players[me].name;
+      BR.ui.open('<h2>Double!</h2><p>' + esc(by) + ' turns the cube to <b>' + this.cube * 2 + '</b>.</p><p class="tag">' + esc(nm) + ': take it and play on for ' + this.cube * 2 + ' points, or drop it and lose ' + this.cube + ' now.</p><div class="row c"><button class="btn" data-a="drop">Drop</button><button class="btn go" data-a="take" data-default>Take</button></div>', { cls: 'small', noBack: true, acts: { take: () => { BR.ui.close(); resolve(true); }, drop: () => { BR.ui.close(); resolve(false); } } });
+    } else {
+      this.k.ai(() => this.aiTakes(opp), t => { BR.toast(this.s.players[opp].name + (t ? ' takes!' : ' drops.')); this.s.quip(t ? 'start' : 'lose', opp, 1); resolve(t); }, 700);
+    }
+  }
+  aiWantsDouble(seat) { const p = bgWinProb(bgView(this.st, seat)), d = this.s.players[seat].diff; const th = d === 'hard' ? .72 : d === 'medium' ? .78 : .62; return p > th && p < .95 && Math.random() < (d === 'easy' ? .5 : 1); }
+  aiTakes(seat) { const v = bgFlip(bgView(this.st, 1 - seat)); const p = 1 - bgWinProb(bgFlip(v)); const d = this.s.players[seat].diff; return p >= (d === 'hard' ? .24 : d === 'medium' ? .2 : .1); }
+  aiPick(seat, diff) {
+    if (!this.seqs || !this.seqs.length) return null;
+    const uniq = new Map(); for (const l of this.seqs) { const k = bgKey(l.v); if (!uniq.has(k)) uniq.set(k, l); }
+    let cands = [...uniq.values()].map(l => ({ l, s: bgEval(l.v) }));
+    if (diff === 'easy') { if (Math.random() < .25) return pick(cands).l.seq; cands.forEach(c => c.s += rnd(-14, 14)); }
+    else if (diff === 'medium') cands.forEach(c => c.s += rnd(-2.5, 2.5));
+    cands.sort((a, b) => b.s - a.s);
+    if (diff === 'hard' && cands.length > 1) {
+      const t0 = now(), top = cands.slice(0, 6);
+      for (const c of top) {
+        if (now() - t0 > 900) break; let tot = 0, w = 0; const ov = bgFlip(c.l.v);
+        for (const [a, b, wt] of BG_ROLLS) { const sq = bgSeqs(ov, [a, b]); let best = sq.length ? -1e9 : bgEval(ov); for (const q of sq) { const e = bgEval(q.v); if (e > best) best = e; } tot += -best * wt; w += wt; if (now() - t0 > 900) break; }
+        c.s2 = tot / w;
+      }
+      const scored = top.filter(c => c.s2 !== undefined); if (scored.length) { scored.sort((a, b) => b.s2 - a.s2); return scored[0].l.seq; }
+    }
+    return cands[0].l.seq;
+  }
+  hud() { const [a] = bgPip(bgView(this.st, 0)), [b] = bgPip(bgView(this.st, 1)); return { score: [a, b], turn: this.s.over ? -1 : this.st.turn, status: this.statusText(), colors: ['#f4e3c1', BGCOL[1]] }; }
+  statusText() { const s = this.s, p = s.players[this.st.turn]; if (s.over) return 'Game over'; const who = p.human ? (s.mode === 'ai' ? 'You' : p.name) : p.name; const cube = this.cubeOn ? ' · cube ' + this.cube : ''; if (this.cubeWait) return 'Double offered!' + cube; if (this.phase === 'roll') return (p.human ? who + ': roll' + (this.canDouble() ? ' or double' : '') : who + ' is deciding…') + cube; if (this.phase === 'move' || this.phase === 'pass') return who + ' · ' + this.dice.join('-') + cube; return 'Pip count' + cube; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); if (this.phase === 'roll') return L === 'pad' ? 'Ⓐ roll' + (this.canDouble() ? ' · Ⓨ double' : '') : L === 'key' ? 'Enter roll' + (this.canDouble() ? ' · R double' : '') : 'Tap Roll' + (this.canDouble() ? ' or Double' : ''); return L === 'pad' ? 'Stick: point · Ⓐ pick/move · Ⓑ undo' : L === 'key' ? 'Arrows: point · Enter pick/move · Backspace undo' : 'Tap a checker, then where it goes'; }
+  drawChecker(c, x, y, seat, r) { c.fillStyle = 'rgba(0,0,0,.35)'; c.beginPath(); c.arc(x + 2, y + 3, r, 0, TAU); c.fill(); c.fillStyle = seat ? '#8e1f16' : '#d8c6a0'; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill(); c.fillStyle = BGCOL[seat]; c.beginPath(); c.arc(x, y, r * .86, 0, TAU); c.fill(); c.strokeStyle = seat ? 'rgba(255,255,255,.18)' : 'rgba(120,90,40,.3)'; c.lineWidth = r * .1; c.beginPath(); c.arc(x, y, r * .55, 0, TAU); c.stroke(); }
+  drawDie(c, x, y, s, v, col) { c.fillStyle = 'rgba(0,0,0,.3)'; rrect(c, x - s / 2 + 3, y - s / 2 + 4, s, s, s * .18); c.fill(); c.fillStyle = col || '#fff'; rrect(c, x - s / 2, y - s / 2, s, s, s * .18); c.fill(); c.fillStyle = '#1d2b3a'; const P = { 1: [[0, 0]], 2: [[-1, -1], [1, 1]], 3: [[-1, -1], [0, 0], [1, 1]], 4: [[-1, -1], [1, -1], [-1, 1], [1, 1]], 5: [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], 6: [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]] }[v] || []; for (const [a, b] of P) { c.beginPath(); c.arc(x + a * s * .27, y + b * s * .27, s * .09, 0, TAU); c.fill(); } }
+  draw(c, W, H) {
+    if (!this.u || this.W !== W || this.H !== H) { this.W = W; this.H = H; this.resize(W, H); } const u = this.u, t = this.t;
+    BR.tableBG(c, W, H, '#2f7a52', '#123824');
+    c.fillStyle = 'rgba(0,0,0,.35)'; rrect(c, this.bx + 6, this.by + 10, this.bw, this.bh, u * .4); c.fill();
+    c.fillStyle = '#6b3d1c'; rrect(c, this.bx, this.by, this.bw, this.bh, u * .4); c.fill();
+    const fx = this.bx + u * .3, fy = this.by + u * .3, fw = u * 13, fh = this.bh - u * .6;
+    c.fillStyle = '#1f6b47'; c.fillRect(fx, fy, 6 * u, fh); c.fillRect(fx + 7 * u, fy, 6 * u, fh);
+    c.fillStyle = '#4a2810'; c.fillRect(fx + 6 * u, fy, u, fh); c.fillRect(this.bx + u * 13.3, fy, u * 1.3, fh);
+    // points
+    const steps = this.legalSteps(); const humanMove = this.humanTurn() && this.phase === 'move'; const srcs = humanMove ? new Set(steps.map(m => this.n2a(m[0]))) : new Set(); const dests = humanMove && this.sel != null ? [...this.destsFrom(this.sel).keys()].map(p => this.n2a(p)) : [];
+    for (let i = 0; i < 24; i++) { const P = this.ptPos(i); const h = u * 4.7; c.fillStyle = (i % 2) ? '#f2d7a6' : '#c0392b'; if (dests.includes(i)) c.fillStyle = '#ffd166'; c.beginPath(); c.moveTo(P.x - u * .47, P.y0); c.lineTo(P.x + u * .47, P.y0); c.lineTo(P.x, P.top ? P.y0 + h : P.y0 - h); c.closePath(); c.fill(); c.fillStyle = 'rgba(255,255,255,.35)'; c.font = '800 ' + Math.round(u * .28) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; const lbl = this.st.turn === 0 || !this.k.isHuman(1) ? i + 1 : 24 - i; c.fillText(lbl, P.x, P.top ? this.by + u * .15 : this.by + this.bh - u * .15); }
+    // checkers
+    const r = u * .44;
+    for (let i = 0; i < 24; i++) { const n = this.st.b[i]; if (!n) continue; const seat = n > 0 ? 0 : 1, cnt = Math.abs(n); for (let k = 0; k < Math.min(cnt, 5); k++) { const [x, y] = this.checkerXY(i, k); this.drawChecker(c, x, y, seat, r); } if (cnt > 5) { const [x, y] = this.checkerXY(i, 4); c.fillStyle = seat ? '#fff' : '#3a2410'; c.font = '900 ' + Math.round(u * .36) + 'px ui-rounded,system-ui,sans-serif'; c.fillText(cnt, x, y); } if (srcs.has(i) && !this.moving) { const [x, y] = this.checkerXY(i, cnt - 1); c.strokeStyle = this.sel != null && this.n2a(this.sel) === i ? '#ffd166' : 'rgba(255,209,102,.55)'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, r + 2, 0, TAU); c.stroke(); } }
+    for (let s = 0; s < 2; s++) { for (let k = 0; k < this.st.bar[s]; k++) { const [x, y] = this.barXY(s, k); this.drawChecker(c, x, y, s, r); } if (this.st.bar[s] > 4) { const [x, y] = this.barXY(s, 3); c.fillStyle = s ? '#fff' : '#3a2410'; c.fillText(this.st.bar[s], x, y); } if (srcs.has(24) && s === this.st.turn) { const [x, y] = this.barXY(s, Math.max(0, this.st.bar[s] - 1)); c.strokeStyle = '#ffd166'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, r + 2, 0, TAU); c.stroke(); } }
+    for (let s = 0; s < 2; s++) { const [x, y] = this.trayXY(s); const n = this.st.off[s]; for (let k = 0; k < n; k++) { c.fillStyle = s ? BGCOL[1] : '#efe2c4'; c.fillRect(x - u * .5, (s ? this.by + u * .4 + k * u * .22 : this.by + this.bh - u * .6 - k * u * .22), u, u * .17); } if (dests.includes(-1) && s === this.st.turn) { c.strokeStyle = '#ffd166'; c.lineWidth = 4; c.strokeRect(this.bx + u * 13.35, s ? fy : this.by + this.bh / 2, u * 1.2, fh / 2 - 2); } if (n) { c.fillStyle = '#ffd166'; c.font = '900 ' + Math.round(u * .34) + 'px ui-rounded,system-ui,sans-serif'; c.fillText(n, x, s ? this.by + u * .4 + n * u * .22 + u * .35 : this.by + this.bh - u * .6 - n * u * .22 - u * .2); } }
+    if (this.moving) { const m = this.moving, k = this.s.fast ? 1 : m.t, e = k * k * (3 - 2 * k); this.drawChecker(c, lerp(m.x0, m.x1, e), lerp(m.y0, m.y1, e) - Math.sin(k * Math.PI) * u * .6, m.seat, r); }
+    // cube
+    if (this.cubeOn) { const cx = this.bx + u * .3 + 6.5 * u, cy = this.owner === -1 ? this.by + this.bh / 2 : this.owner === 0 ? this.by + this.bh - u * 1.2 : this.by + u * 1.2; c.fillStyle = '#fdfdfd'; rrect(c, cx - u * .42, cy - u * .42, u * .84, u * .84, u * .14); c.fill(); c.fillStyle = '#12355b'; c.font = '900 ' + Math.round(u * .4) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(this.cube === 1 ? 64 : this.cube, cx, cy + 1); }
+    // dice + buttons
+    const B = this.btns(), cy = this.by + this.bh / 2;
+    if (this.dice.length && (this.phase === 'move' || this.phase === 'pass')) { const side = B.roll[0]; const used = this.done.map(m => m[2]); const dd = this.dice[0] === this.dice[1] ? [this.dice[0], this.dice[0], this.dice[0], this.dice[0]] : this.dice; const rem = dd.slice(); for (const x of used) { const i = rem.indexOf(x); if (i >= 0) rem.splice(i, 1); } let ui = 0; const usedFlags = dd.map(v => { const i = rem.indexOf(v); if (i >= 0) { rem.splice(i, 1); return false; } return true; }); dd.forEach((v, i) => { c.globalAlpha = usedFlags[i] ? .35 : 1; this.drawDie(c, side + (i - (dd.length - 1) / 2) * u * 1.05, cy, u * .85, v, this.st.turn ? '#ffd9d2' : '#fff'); }); c.globalAlpha = 1; }
+    if (this.phase === 'roll' && this.humanTurn()) { const pulse = 1 + Math.sin(t * 5) * .05; c.fillStyle = '#ffd166'; rrect(c, B.roll[0] - u * 1.2 * pulse, cy - u * .45, u * 2.4 * pulse, u * .9, u * .45); c.fill(); c.fillStyle = '#12355b'; c.font = '900 ' + Math.round(u * .4) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('ROLL', B.roll[0], cy + 1); if (B.dbl) { c.fillStyle = '#fff'; rrect(c, B.dbl[0] - u * .95, cy - u * .4, u * 1.9, u * .8, u * .4); c.fill(); c.fillStyle = '#c0392b'; c.font = '900 ' + Math.round(u * .3) + 'px ui-rounded,system-ui,sans-serif'; c.fillText('DOUBLE', B.dbl[0], cy + 1); } }
+    if (humanMove && this.done.length) { c.fillStyle = 'rgba(255,255,255,.85)'; rrect(c, B.undo[0] - u * .8, cy - u * .35, u * 1.6, u * .7, u * .35); c.fill(); c.fillStyle = '#12355b'; c.font = '900 ' + Math.round(u * .28) + 'px ui-rounded,system-ui,sans-serif'; c.fillText('UNDO', B.undo[0], cy + 1); }
+    if (humanMove && BR.showCursor()) { const a = this.curToPos(this.cur.x, this.cur.y); let x, y; if (a === 24) { x = this.bx + u * .3 + 6 * u; y = this.cur.y ? cy : fy; BR.drawCursor(c, x, y, u, fh / 2, t, '#ffd166'); } else if (a < 0) { BR.drawCursor(c, this.bx + u * 13.3, this.cur.y ? cy : fy, u * 1.3, fh / 2, t, '#ffd166'); } else { const P = this.ptPos(a); BR.drawCursor(c, P.x - u * .5, P.top ? P.y0 : P.y0 - u * 4.9, u, u * 4.9, t, '#ffd166'); } }
+    this.drawFx(c);
+  }
+  testClicks() {
+    if (this.phase === 'roll') return [this.btns().roll];
+    if (this.phase !== 'move') return [];
+    const st = this.legalSteps(); if (!st.length) return []; const m = pick(st); const me = this.st.turn;
+    const src = this.n2a(m[0]), dst = this.n2a(m[1]); const sxy = src === 24 ? this.barXY(me, 0) : this.checkerXY(src, 0); const dxy = dst < 0 ? [this.bx + this.u * 13.95, me ? this.by + this.u * 2 : this.by + this.bh - this.u * 2] : this.checkerXY(dst, 0);
+    return this.sel != null ? [] : [sxy, dxy];
+  }
+  testInfo() { return { over: this.s.over, turn: this.st.turn, human: this.humanTurn(), clicks: this.humanTurn() ? this.testClicks() : null, phase: this.phase }; }
+}
+BR.bg = { bgSeqs, bgView, bgStart, bgEval };
+BR.registerGame({
+  id: 'backgammon', name: 'Backgammon', tag: 'Race your checkers home with dice, doubling and blots.', color: '#8b5a2b', wave: 2, seats: ['White', 'Red'],
+  options: [{ id: 'cube', label: 'Doubling cube', choices: [['on', 'On'], ['off', 'Off']], def: 0 }],
+  howTo: ['Roll two dice and move checkers that many points toward your home board (White runs counter-clockwise to the bottom right, Red to the top right). Doubles play four times.', 'You can land on any point not held by two or more rival checkers. Land on a lone rival checker (a blot) to hit it to the bar: it must re-enter before that player moves anything else.', 'Use both dice if you can. If only one can be played, it must be the larger when possible.', 'Once all 15 checkers are home, bear them off. First to bear off all 15 wins: a gammon (rival bore off none) counts double, a backgammon triple.', 'Before rolling you may offer the doubling cube. Your rival takes (game is now worth double) or drops (and loses at the current stake).'],
+  controls: { pad: 'Stick/D-pad to a point, A to pick a checker then its landing point, B undo. A rolls, Y doubles.', key: 'Arrows/WASD, Enter/Space to pick and move, Backspace undo, R to double.', touch: 'Tap Roll, then tap a checker and tap where it lands (glowing points). Undo button takes it back.' },
+  icon(c, x, y, s) { c.fillStyle = '#6b3d1c'; rrect(c, x - s * .8, y - s * .6, s * 1.6, s * 1.2, 8); c.fill(); for (let i = 0; i < 4; i++) { c.fillStyle = i % 2 ? '#f2d7a6' : '#c0392b'; c.beginPath(); c.moveTo(x - s * .7 + i * s * .36, y - s * .55); c.lineTo(x - s * .7 + i * s * .36 + s * .32, y - s * .55); c.lineTo(x - s * .54 + i * s * .36, y + s * .05); c.fill(); } c.fillStyle = '#fff'; rrect(c, x - s * .1, y + s * .05, s * .4, s * .4, 5); c.fill(); c.fillStyle = '#1d2b3a'; c.beginPath(); c.arc(x + s * .1, y + s * .25, s * .06, 0, TAU); c.fill(); c.fillStyle = '#fdf6e6'; c.beginPath(); c.arc(x - s * .45, y + s * .3, s * .17, 0, TAU); c.fill(); c.fillStyle = '#c0392b'; c.beginPath(); c.arc(x + s * .55, y + s * .3, s * .17, 0, TAU); c.fill(); },
+  create: s => new Backgammon(s)
+});
+/* ================= Chinese Checkers (2, 3, 4 or 6 players; extra seats are AI rivals) ================= */
+const CC_DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]]; // axial (q, r)
+const CC = (() => {
+  const cells = [], idx = new Map();
+  for (let q = -8; q <= 8; q++) for (let r = -8; r <= 8; r++) { const x = q, z = r, y = -x - z; const inA = x >= -4 && y >= -4 && z >= -4, inB = x <= 4 && y <= 4 && z <= 4; if (!(inA || inB)) continue; idx.set(q + ',' + r, cells.length); cells.push({ q, r, x, y, z }); }
+  const nb = cells.map(c => CC_DIRS.map(([dq, dr]) => { const k = idx.get((c.q + dq) + ',' + (c.r + dr)); return k === undefined ? -1 : k; }));
+  const corner = cells.map(c => c.z < -4 ? 0 : c.x > 4 ? 1 : c.y < -4 ? 2 : c.z > 4 ? 3 : c.x < -4 ? 4 : c.y > 4 ? 5 : -1);
+  const tri = [0, 1, 2, 3, 4, 5].map(k => cells.map((c, i) => corner[i] === k ? i : -1).filter(i => i >= 0));
+  const tips = tri.map(t => { let best = t[0], bd = -1; for (const i of t) { const c = cells[i]; const d = Math.max(Math.abs(c.x), Math.abs(c.y), Math.abs(c.z)); if (d > bd) { bd = d; best = i; } } return best; });
+  const dist = (a, b) => { const A = cells[a], B = cells[b]; return Math.max(Math.abs(A.x - B.x), Math.abs(A.y - B.y), Math.abs(A.z - B.z)); };
+  return { cells, idx, nb, corner, tri, tips, dist };
+})();
+const CC_LAYOUT = { 2: [3, 0], 3: [3, 1, 5], 4: [3, 0, 1, 4], 6: [3, 0, 1, 4, 2, 5] };
+const CC_COL = ['#ff6f59', '#1d9bb5', '#ffd166', '#3fae5a', '#b388ff', '#f4f4f4'];
+const CC_CNAME = ['red', 'blue', 'yellow', 'green', 'purple', 'white'];
+function ccMoves(board, from) {
+  const res = new Map(); // to -> path
+  for (const n of CC.nb[from]) if (n >= 0 && board[n] < 0) res.set(n, [from, n]);
+  const seen = new Set([from]); const q = [[from, [from]]];
+  while (q.length) { const [c, path] = q.shift(); for (let d = 0; d < 6; d++) { const mid = CC.nb[c][d]; if (mid < 0 || board[mid] < 0) continue; const land = CC.nb[mid][d]; if (land < 0 || board[land] >= 0 || seen.has(land)) continue; seen.add(land); const np = path.concat([land]); if (!res.has(land)) res.set(land, np); q.push([land, np]); } }
+  return res;
+}
+class ChineseCheckers extends TurnGame {
+  constructor(s) {
+    super(s); const n = +(s.opts.players || 2); this.n = n; this.home = CC_LAYOUT[n]; this.target = this.home.map(h => (h + 3) % 6);
+    this.board = Array(CC.cells.length).fill(-1); this.home.forEach((h, seat) => CC.tri[h].forEach(i => this.board[i] = seat));
+    const used = new Set(s.players.map(p => p.char).filter(Boolean)); const pool = BR.CHARS.filter(c => !used.has(c.id));
+    const fd = s.mode === 'local' ? (s.diff || 'medium') : (s.players.find(p => !p.human) || {}).diff || s.diff || 'medium';
+    this.pl = [s.players[0], s.players[1]]; for (let i = 2; i < n; i++) { const ch = pool[(i - 2) % pool.length]; this.pl.push({ human: false, char: ch.id, name: ch.name, face: ch.id, diff: fd, filler: true }); }
+    this.st = { turn: 0 }; this.done = []; this.finished = []; this.moves = 0; this.sel = -1; this.curCell = CC.tips[this.home[0]]; this.path = null; this.lastPath = null; this.limit = 160 * n;
+  }
+  seat() { return this.st.turn; }
+  isHumanSeat(i) { return i < 2 && this.k.isHuman(i); }
+  humanTurn() { return !this.s.over && !this.anim && this.isHumanSeat(this.st.turn); }
+  resize(W, H) { const top = BR.HUD_H + 8, aw = W - 20, ah = H - top - 12; const k = Math.min(aw / (Math.sqrt(3) * 13.2), ah / 26); this.k2 = k; this.ox = W / 2; this.oy = top + ah / 2; }
+  xy(i) { const c = CC.cells[i], k = this.k2; let x = Math.sqrt(3) * (c.q + c.r / 2) * k, y = 1.5 * c.r * k; if (this.rot) { x = -x; y = -y; } return [this.ox + x, this.oy + y]; }
+  cellAt(x, y) { let best = -1, bd = this.k2 * .9; for (let i = 0; i < CC.cells.length; i++) { const [px, py] = this.xy(i); const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } } return best; }
+  progress(seat, board) { const tip = CC.tips[this.target[seat]]; let s = 0; for (let i = 0; i < board.length; i++) if (board[i] === seat) s += CC.dist(i, tip); return s; }
+  inTarget(seat, board) { let n = 0; for (const i of CC.tri[this.target[seat]]) if (board[i] === seat) n++; return n; }
+  isDone(seat, board) { const T = CC.tri[this.target[seat]]; let mine = 0; for (const i of T) { if (board[i] < 0) return false; if (board[i] === seat) mine++; } return mine > 0; }
+  allMoves(seat, board) { const out = []; for (let i = 0; i < board.length; i++) if (board[i] === seat) for (const [to, path] of ccMoves(board, i)) { if (CC.corner[to] >= 0 && CC.corner[to] !== this.target[seat] && CC.corner[to] !== this.home[seat] && CC.corner[i] !== CC.corner[to]) continue; out.push({ from: i, to, path }); } return out; }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < (f.d || 1));
+    if (this.anim) { this.anim.t += dt / (this.s.fast ? 0.02 : this.anim.d); if (this.anim.t >= 1) { const a = this.anim; this.anim = null; if (a.done) a.done(); } return; }
+    if (this.s.over) return; const seat = this.st.turn;
+    if (this.isHumanSeat(seat)) this.humanInput(this.k.nav(seat), seat);
+    else if (!this.k.thinking) this.k.ai(() => this.aiPick(seat, this.pl[seat].diff), m => { if (m) this.commit(m); else this.advance(); }, this.pl[seat].filler ? 260 : 450);
+  }
+  humanInput(n, seat) {
+    if (n.dx || n.dy) { const [cx, cy] = this.xy(this.curCell); let best = -1, bs = 1e9; for (let i = 0; i < CC.cells.length; i++) { if (i === this.curCell) continue; const [x, y] = this.xy(i), vx = x - cx, vy = y - cy, prim = n.dx ? vx * n.dx : vy * n.dy; if (prim < 3) continue; const sc = prim + (n.dx ? Math.abs(vy) : Math.abs(vx)) * 1.6; if (sc < bs) { bs = sc; best = i; } } if (best >= 0) { this.curCell = best; Snd.play('move'); } }
+    if (n.b && this.sel >= 0) { this.sel = -1; Snd.play('back'); }
+    if (n.a) this.clickCell(this.curCell);
+  }
+  legalFrom(i) { const seat = this.st.turn; return this.allMoves(seat, this.board).filter(m => m.from === i); }
+  clickCell(i) {
+    if (i < 0) return; const seat = this.st.turn;
+    if (this.sel >= 0) { const m = this.legalFrom(this.sel).find(m => m.to === i); if (m) { this.sel = -1; this.commit(m); return; } }
+    if (this.board[i] === seat) { if (!this.legalFrom(i).length) { Snd.play('error'); return; } this.sel = i; Snd.play('select'); return; }
+    if (this.sel === i) { this.sel = -1; return; }
+    Snd.play('error');
+  }
+  pointer(type, p) { if (type !== 'down' || !this.humanTurn() || !this.k2) return; const i = this.cellAt(p.x, p.y); if (i < 0) return; this.curCell = i; this.clickCell(i); }
+  commit(m) {
+    const seat = this.st.turn; if (this.board[m.from] !== seat || this.board[m.to] >= 0) return; this.board[m.from] = -1; this.path = m.path; this.animSeat = seat;
+    const jumps = m.path.length - 1, isJump = CC.dist(m.path[0], m.path[1]) === 2; this.anim = { t: 0, d: Math.min(1.6, .2 + .16 * jumps), done: () => {
+      this.board[m.to] = seat; this.lastPath = m.path; this.path = null; Snd.play(isJump ? 'clack' : 'place'); if (isJump && jumps >= 3) { Snd.play('coin'); this.s.quip(this.pl[seat].human ? 'bad' : 'good', null, .5); if (seat < 2) this.s.rumble(seat, 120, .4, .3); }
+      this.moves++; this.afterMove(seat);
+    } };
+  }
+  afterMove(seat) {
+    if (this.isDone(seat, this.board) && !this.finished.includes(seat)) {
+      this.finished.push(seat); const [x, y] = this.xy(CC.tips[this.target[seat]]); this.burst(x, y, CC_COL[seat], 30);
+      if (seat < 2) { this.s.rumble(seat, 300, .8, .6); this.s.end(seat, { detail: this.finishDetail() }); return; }
+      BR.toast(this.pl[seat].name + ' made it home!');
+    }
+    if (this.moves >= this.limit) { const a = this.inTarget(0, this.board) * 100 - this.progress(0, this.board), b = this.inTarget(1, this.board) * 100 - this.progress(1, this.board); this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Move limit reached: decided on pieces home' }); return; }
+    this.advance();
+  }
+  finishDetail() { const order = this.finished.map(i => this.pl[i].name); return this.n > 2 ? 'Finish order: ' + order.join(', ') : 'All ten pegs home'; }
+  advance() { for (let k = 1; k <= this.n; k++) { const nx = (this.st.turn + k) % this.n; if (!this.finished.includes(nx)) { this.st.turn = nx; break; } } this.sel = -1; if (this.isHumanSeat(this.st.turn)) { const mine = this.board.map((v, i) => v === this.st.turn ? i : -1).filter(i => i >= 0); if (this.board[this.curCell] !== this.st.turn) this.curCell = mine.sort((a, b) => CC.dist(b, CC.tips[this.target[this.st.turn]]) - CC.dist(a, CC.tips[this.target[this.st.turn]]))[0]; } }
+  aiPick(seat, diff) {
+    const B = this.board, ms = this.allMoves(seat, B); if (!ms.length) return null; const tip = CC.tips[this.target[seat]], T = new Set(CC.tri[this.target[seat]]);
+    const gain = (m, b) => { let g = CC.dist(m.from, tip) - CC.dist(m.to, tip); if (T.has(m.from) && !T.has(m.to)) g -= 3; if (!T.has(m.from) && T.has(m.to)) g += .6; return g; };
+    const strag = b => { let mx = 0; for (let i = 0; i < b.length; i++) if (b[i] === seat) mx = Math.max(mx, CC.dist(i, tip)); return mx; };
+    if (diff === 'easy') { const sc = ms.map(m => ({ m, g: gain(m, B) + rnd(-2.5, 2.5) })); sc.sort((a, b) => b.g - a.g); return Math.random() < .2 ? pick(ms) : sc[0].m; }
+    const sc = [];
+    for (const m of ms) {
+      let g = gain(m, B); const b2 = B.slice(); b2[m.from] = -1; b2[m.to] = seat;
+      if (diff === 'hard') { let best2 = 0; for (const m2 of this.allMoves(seat, b2)) { const g2 = gain(m2, b2); if (g2 > best2) best2 = g2; } g += best2 * .55 - strag(b2) * .12; if (this.isDone(seat, b2)) g += 100; }
+      else g += rnd(-.6, .6) - strag(b2) * .05;
+      sc.push({ m, g });
+    }
+    sc.sort((a, b) => b.g - a.g); return sc[0].m;
+  }
+  hud() { return { score: [this.inTarget(0, this.board), this.inTarget(1, this.board)], turn: this.s.over ? -1 : (this.st.turn < 2 ? this.st.turn : -1), colors: CC_COL, status: this.statusText() }; }
+  statusText() { if (this.s.over) return 'Game over'; const p = this.pl[this.st.turn]; if (p.human) return (this.s.mode === 'ai' ? 'Your move' : p.name + ': your move') + (this.sel >= 0 ? ' · pick a glowing hole' : ''); return p.name + ' (' + CC_CNAME[this.st.turn] + ') is thinking…'; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'Stick: move · Ⓐ pick a peg, then a glowing hole · Ⓑ cancel' : L === 'key' ? 'Arrows: move · Enter pick, Enter land · Backspace cancel' : 'Tap a peg, then a glowing hole (jumps chain automatically)'; }
+  draw(c, W, H) {
+    if (!this.k2 || this.W !== W || this.H !== H) { this.W = W; this.H = H; this.resize(W, H); } const k = this.k2, t = this.t;
+    this.rot = this.s.mode === 'local' && this.st.turn === 1 && false;
+    BR.tableBG(c, W, H, '#7b4bb3', '#2a1450');
+    // star body
+    c.fillStyle = '#f3e3c3'; c.strokeStyle = '#c9a66b'; c.lineWidth = 3; const R = k * 13.6;
+    for (const tri of [0, 1]) { c.beginPath(); for (let i = 0; i < 3; i++) { const a = -Math.PI / 2 + tri * Math.PI + i * TAU / 3; const x = this.ox + Math.cos(a) * R, y = this.oy + Math.sin(a) * R; i ? c.lineTo(x, y) : c.moveTo(x, y); } c.closePath(); c.fill(); c.stroke(); }
+    // corner tints
+    for (let s = 0; s < this.n; s++) for (const i of CC.tri[this.home[s]]) { const [x, y] = this.xy(i); c.fillStyle = CC_COL[s]; c.globalAlpha = .22; c.beginPath(); c.arc(x, y, k * .95, 0, TAU); c.fill(); c.globalAlpha = 1; }
+    const legal = this.humanTurn() && this.sel >= 0 ? this.legalFrom(this.sel).map(m => m.to) : [];
+    const movable = this.humanTurn() && this.sel < 0 ? new Set(this.allMoves(this.st.turn, this.board).map(m => m.from)) : new Set();
+    if (this.lastPath && !this.path) { c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 3; c.setLineDash([5, 6]); c.beginPath(); this.lastPath.forEach((i, j) => { const [x, y] = this.xy(i); j ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke(); c.setLineDash([]); }
+    for (let i = 0; i < CC.cells.length; i++) {
+      const [x, y] = this.xy(i), v = this.board[i];
+      c.fillStyle = 'rgba(90,60,20,.45)'; c.beginPath(); c.arc(x, y, k * .42, 0, TAU); c.fill();
+      if (legal.includes(i)) { c.fillStyle = 'rgba(255,209,102,' + (.55 + .3 * Math.sin(t * 6)) + ')'; c.beginPath(); c.arc(x, y, k * .5, 0, TAU); c.fill(); }
+      if (v >= 0) this.peg(c, x, y, v, k * .62, i === this.sel, movable.has(i));
+    }
+    if (this.path && this.anim) { const P = this.path, e = this.s.fast ? 1 : this.anim.t, f = e * (P.length - 1), j = Math.min(P.length - 2, Math.floor(f)), u = f - j; const [x0, y0] = this.xy(P[j]), [x1, y1] = this.xy(P[j + 1]); this.peg(c, lerp(x0, x1, u), lerp(y0, y1, u) - Math.sin(u * Math.PI) * k * .9, this.animSeat, k * .66, false, false); }
+    if (this.humanTurn() && BR.showCursor()) { const [x, y] = this.xy(this.curCell); c.strokeStyle = '#ffd166'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, k * .8 + Math.sin(t * 6) * 1.5, 0, TAU); c.stroke(); }
+    // seat legend for multi-player
+    if (this.n > 2) { c.font = '800 13px ui-rounded,system-ui,sans-serif'; c.textAlign = 'left'; c.textBaseline = 'middle'; for (let s = 0; s < this.n; s++) { const y = BR.HUD_H + 18 + s * 20; c.fillStyle = CC_COL[s]; c.beginPath(); c.arc(16, y, 6, 0, TAU); c.fill(); c.fillStyle = s === this.st.turn ? '#ffd166' : '#fff'; c.fillText(this.pl[s].name + (this.finished.includes(s) ? ' ✓' : '') + ' ' + this.inTarget(s, this.board) + '/10', 28, y); } }
+    this.drawFx(c);
+  }
+  peg(c, x, y, seat, r, sel, mov) { c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.arc(x + 1.5, y + 2.5, r * .7, 0, TAU); c.fill(); const g = c.createRadialGradient(x - r * .25, y - r * .25, 1, x, y, r * .7); g.addColorStop(0, '#fff'); g.addColorStop(.35, CC_COL[seat]); g.addColorStop(1, BR.shade(CC_COL[seat], -60)); c.fillStyle = g; c.beginPath(); c.arc(x, y, r * .7, 0, TAU); c.fill(); if (sel || mov) { c.strokeStyle = sel ? '#ffd166' : 'rgba(255,209,102,.55)'; c.lineWidth = sel ? 3 : 1.6; c.beginPath(); c.arc(x, y, r * .82, 0, TAU); c.stroke(); } }
+  testClicks() { const ms = this.allMoves(this.st.turn, this.board); if (!ms.length) return []; const tip = CC.tips[this.target[this.st.turn]]; ms.sort((a, b) => (CC.dist(a.to, tip) - CC.dist(a.from, tip)) - (CC.dist(b.to, tip) - CC.dist(b.from, tip))); const m = Math.random() < .7 ? ms[0] : pick(ms); return this.sel >= 0 ? [this.xy(this.sel)] : [this.xy(m.from), this.xy(m.to)]; }
+  testInfo() { return { over: this.s.over, turn: this.st.turn, human: this.humanTurn(), clicks: this.humanTurn() ? this.testClicks() : null, n: this.n, finished: this.finished.slice(), moves: this.moves }; }
+}
+BR.cc = CC;
+BR.registerGame({
+  id: 'chinese-checkers', name: 'Chinese Checkers', tag: 'Hop across the star in long chain jumps.', color: '#e94b3c', wave: 2, seats: ['Red (first)', 'Blue (second)'],
+  options: [{ id: 'players', label: 'Players on the star', choices: [[2, '2 (head-to-head)'], [3, '3 (+1 AI rival)'], [4, '4 (+2 AI rivals)'], [6, '6 (+4 AI rivals)']], def: 0 }],
+  localNote: 'Pass and play. Extra seats on the star are filled by boardwalk AI rivals.',
+  howTo: ['Race all ten of your pegs into the star point straight across from your home.', 'On your turn move one peg to a neighboring empty hole, or jump over any single peg (yours or a rival\'s) into the empty hole right behind it.', 'Jumps can chain: keep hopping as far as you like. Pick the landing hole and the peg takes the route automatically.', 'With 3, 4 or 6 players the extra seats are boardwalk AI rivals. Beat your real opponent home to win!', 'Pegs cannot stop in a star point that is nobody\'s home or target.'],
+  controls: { pad: 'Stick/D-pad to move, A to pick a peg and A on a glowing hole to land, B to cancel.', key: 'Arrows/WASD, Enter or Space to pick and land, Backspace to cancel.', touch: 'Tap a peg, then tap a glowing hole.' },
+  icon(c, x, y, s) { c.fillStyle = '#f3e3c3'; for (const tri of [0, 1]) { c.beginPath(); for (let i = 0; i < 3; i++) { const a = -Math.PI / 2 + tri * Math.PI + i * TAU / 3; i ? c.lineTo(x + Math.cos(a) * s * .8, y + Math.sin(a) * s * .8) : c.moveTo(x + Math.cos(a) * s * .8, y + Math.sin(a) * s * .8); } c.fill(); } [[0, -.5, 0], [-.35, .25, 1], [.35, .25, 2], [0, 0, 3]].forEach(([a, b, k]) => { c.fillStyle = CC_COL[k]; c.beginPath(); c.arc(x + a * s, y + b * s, s * .12, 0, TAU); c.fill(); }); },
+  create: s => new ChineseCheckers(s)
+});
+/* ================= Dots and Boxes ================= */
+/* lines: horizontal (R+1)*C first, then vertical R*(C+1). boxes R*C. */
+function dbMake(R, C) {
+  const nH = (R + 1) * C, nL = nH + R * (C + 1), boxL = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) boxL.push([r * C + c, (r + 1) * C + c, nH + r * (C + 1) + c, nH + r * (C + 1) + c + 1]);
+  const lineB = Array.from({ length: nL }, () => []); boxL.forEach((ls, bi) => ls.forEach(l => lineB[l].push(bi)));
+  return { R, C, nH, nL, boxL, lineB };
+}
+function dbSides(G, L, bi) { let n = 0; for (const l of G.boxL[bi]) if (L[l]) n++; return n; }
+function dbPlay(G, st, l) {
+  const L = st.L.slice(), B = st.B.slice(); L[l] = st.turn + 1; let got = 0;
+  for (const bi of G.lineB[l]) if (!B[bi] && dbSides(G, L, bi) === 4) { B[bi] = st.turn + 1; got++; }
+  const sc = st.sc.slice(); sc[st.turn] += got; const n = st.n + 1;
+  return { L, B, sc, n, turn: got ? st.turn : 1 - st.turn, got, over: n === G.nL };
+}
+function dbFree(st) { const r = []; for (let i = 0; i < st.L.length; i++) if (!st.L[i]) r.push(i); return r; }
+function dbCompleting(G, st) { return dbFree(st).filter(l => G.lineB[l].some(bi => !st.B[bi] && dbSides(G, st.L, bi) === 3)); }
+function dbSafe(G, st) { return dbFree(st).filter(l => G.lineB[l].every(bi => dbSides(G, st.L, bi) < 2)); }
+/* how many boxes the next player can grab in a row after line l is drawn */
+function dbGift(G, st, l) { let s = dbPlay(G, st, l); if (s.got) return -s.got; const who = s.turn; let n = 0; for (let g = 0; g < 60; g++) { const c = dbCompleting(G, s); if (!c.length) break; s = dbPlay(G, s, c[0]); n += s.got; if (s.turn !== who) break; } return n; }
+/* exact endgame solver: value = boxes still to win for the side to move minus the rival's (memo on the set of free lines) */
+function dbSolve(G, st) {
+  const fl = dbFree(st), L = st.L.slice(), memo = new Map(), t0 = now(); let nodes = 0;
+  const gain = l => { let g = 0; for (const bi of G.lineB[l]) { let n = 0; for (const x of G.boxL[bi]) if (L[x]) n++; if (n === 4) g++; } return g; };
+  function val(mask) {
+    if (mask === 0) return 0; const hit = memo.get(mask); if (hit !== undefined) return hit;
+    if ((++nodes & 1023) === 0 && now() - t0 > 1500) throw 'T';
+    let best = -1e9;
+    for (let i = 0; i < fl.length; i++) { const bit = 1 << i; if (!(mask & bit)) continue; const l = fl[i]; L[l] = 1; const g = gain(l); const v = g ? g + val(mask ^ bit) : -val(mask ^ bit); L[l] = 0; if (v > best) best = v; }
+    memo.set(mask, best); return best;
+  }
+  try { let bm = null, bv = -1e9; const full = (1 << fl.length) - 1; for (let i = 0; i < fl.length; i++) { const l = fl[i]; L[l] = 1; const g = gain(l); const v = (g ? g + val(full ^ (1 << i)) : -val(full ^ (1 << i))) + Math.random() * .01; L[l] = 0; if (v > bv) { bv = v; bm = l; } } return bm; } catch (e) { if (e !== 'T') throw e; return null; }
+}
+class DotsBoxes extends TurnGame {
+  constructor(s) { super(s); const n = +(s.opts.size || 4); this.G = dbMake(n, n); this.st = { L: Array(this.G.nL).fill(0), B: Array(n * n).fill(0), sc: [0, 0], n: 0, turn: 0, over: false }; this.curL = 0; this.drawnAt = []; this.boxAt = []; }
+  resize(W, H) { const G = this.G; this.br = BR.fitBoard(G.C + .6, G.R + .6, W, H, { pad: 24 }); this.br.x += this.br.cs * .3; this.br.y += this.br.cs * .3; }
+  dot(r, c) { return [this.br.x + c * this.br.cs, this.br.y + r * this.br.cs]; }
+  seg(l) { const G = this.G; if (l < G.nH) { const r = Math.floor(l / G.C), c = l % G.C; return [this.dot(r, c), this.dot(r, c + 1)]; } const k = l - G.nH, r = Math.floor(k / (G.C + 1)), c = k % (G.C + 1); return [this.dot(r, c), this.dot(r + 1, c)]; }
+  mid(l) { const [a, b] = this.seg(l); return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
+  lineAt(x, y) { let best = -1, bd = this.br.cs * .38; for (let l = 0; l < this.G.nL; l++) { const [a, b] = this.seg(l); const t = clamp(((x - a[0]) * (b[0] - a[0]) + (y - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2), 0, 1); const d = Math.hypot(x - (a[0] + (b[0] - a[0]) * t), y - (a[1] + (b[1] - a[1]) * t)); if (d < bd) { bd = d; best = l; } } return best; }
+  humanInput(n) {
+    if (n.dx || n.dy) { const [cx, cy] = this.mid(this.curL); let best = -1, bs = 1e9; for (let l = 0; l < this.G.nL; l++) { if (l === this.curL) continue; const [x, y] = this.mid(l); const vx = x - cx, vy = y - cy, prim = n.dx ? vx * n.dx : vy * n.dy; if (prim < 4) continue; const s = prim + (n.dx ? Math.abs(vy) : Math.abs(vx)) * 2.2; if (s < bs) { bs = s; best = l; } } if (best >= 0) { this.curL = best; Snd.play('move'); } }
+    if (n.a) this.tryLine(this.curL);
+  }
+  pointer(type, p) { if (!this.br || !this.humanTurn()) return; const l = this.lineAt(p.x, p.y); if (l >= 0 && (type === 'move' || type === 'down')) this.curL = l; if (type === 'down') this.pdl = l; if (type === 'up') { if (l >= 0 && l === this.pdl) this.tryLine(l); this.pdl = -1; } }
+  tryLine(l) { if (this.st.L[l]) { Snd.play('error'); return; } this.commit(l); }
+  commit(l) {
+    const prev = this.st; if (prev.L[l] || prev.over) return; const nx = dbPlay(this.G, prev, l); this.st = nx; this.drawnAt[l] = this.t; Snd.play('clack');
+    if (nx.got) { for (const bi of this.G.lineB[l]) if (nx.B[bi] && !prev.B[bi]) { this.boxAt[bi] = this.t; const r = Math.floor(bi / this.G.C), c = bi % this.G.C; const [x, y] = this.dot(r + .5, c + .5); this.burst(x, y, BR.PCOL[prev.turn], 10); } Snd.play('coin'); this.s.rumble(prev.turn, 90, .4, .3); if (nx.got === 2) this.s.quip(this.s.players[prev.turn].human ? 'bad' : 'good', null, .5); }
+    if (nx.over) { const [a, b] = nx.sc; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Boxes ' + a + ' – ' + b }); }
+  }
+  aiPick(seat, diff) {
+    const G = this.G, st = this.st, comp = dbCompleting(G, st), safe = dbSafe(G, st), free = dbFree(st);
+    if (diff === 'easy') { if (comp.length && Math.random() < .75) return pick(comp); if (safe.length && Math.random() < .5) return pick(safe); return pick(free); }
+    if (free.length <= (diff === 'hard' ? 15 : 9)) { const m = dbSolve(G, st); if (m != null) return m; }
+    if (comp.length) return comp[0];
+    if (safe.length) return pick(safe);
+    let best = [], bv = 1e9; for (const l of free) { const g = dbGift(G, st, l) + (diff === 'medium' ? Math.random() * 1.5 : 0); if (g < bv) { bv = g; best = [l]; } else if (g === bv) best.push(l); }
+    return pick(best);
+  }
+  hud() { return { score: this.st.sc, turn: this.s.over ? -1 : this.st.turn, status: this.status(this.st.got && !this.s.over ? 'box! go again' : null), colors: BR.PCOL }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'Stick/D-pad: choose a line · Ⓐ draw it' : L === 'key' ? 'Arrows: choose a line · Enter draw it' : 'Tap between two dots to draw a line'; }
+  draw(c, W, H) {
+    if (!this.br) this.resize(W, H); const G = this.G, cs = this.br.cs, t = this.t;
+    BR.tableBG(c, W, H, '#1d9bb5', '#0c3c52');
+    c.fillStyle = '#fdf8ee'; rrect(c, this.br.x - cs * .45, this.br.y - cs * .45, G.C * cs + cs * .9, G.R * cs + cs * .9, 18); c.fill();
+    c.strokeStyle = 'rgba(29,155,181,.15)'; c.lineWidth = 1; for (let y = this.br.y - cs * .4; y < this.br.y + G.R * cs + cs * .4; y += cs / 4) { c.beginPath(); c.moveTo(this.br.x - cs * .4, y); c.lineTo(this.br.x + G.C * cs + cs * .4, y); c.stroke(); }
+    for (let bi = 0; bi < G.boxL.length; bi++) { const v = this.st.B[bi]; if (!v) continue; const r = Math.floor(bi / G.C), cc = bi % G.C, k = this.s.fast ? 1 : clamp((t - (this.boxAt[bi] || 0)) / .3, 0, 1); const [x, y] = this.dot(r, cc); c.fillStyle = BR.PCOL[v - 1]; c.globalAlpha = .28 + .1 * k; c.fillRect(x + 4, y + 4, cs - 8, cs - 8); c.globalAlpha = 1; c.fillStyle = BR.PCOL[v - 1]; c.font = '900 ' + Math.round(cs * .4 * (.6 + .4 * k)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(v === 1 ? '★' : '●', x + cs / 2, y + cs / 2); }
+    for (let l = 0; l < G.nL; l++) { const [a, b] = this.seg(l), v = this.st.L[l]; c.lineCap = 'round'; if (v) { const k = this.s.fast ? 1 : clamp((t - (this.drawnAt[l] || 0)) / .18, 0, 1); c.strokeStyle = BR.PCOL[v - 1]; c.lineWidth = Math.max(5, cs * .09); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(lerp(a[0], b[0], k), lerp(a[1], b[1], k)); c.stroke(); } else { c.strokeStyle = 'rgba(18,53,91,.08)'; c.lineWidth = 3; c.setLineDash([4, 8]); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.setLineDash([]); } }
+    if (this.humanTurn() && (BR.showCursor() || Input.lastKind === 'pointer' && !this.st.L[this.curL])) { const [a, b] = this.seg(this.curL); c.strokeStyle = this.st.L[this.curL] ? 'rgba(255,79,58,.5)' : BR.PCOL[this.st.turn]; c.globalAlpha = .45 + .25 * Math.sin(t * 6); c.lineWidth = Math.max(8, cs * .12); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.globalAlpha = 1; }
+    c.fillStyle = '#12355b'; for (let r = 0; r <= G.R; r++) for (let cc = 0; cc <= G.C; cc++) { const [x, y] = this.dot(r, cc); c.beginPath(); c.arc(x, y, Math.max(5, cs * .07), 0, TAU); c.fill(); }
+    this.drawFx(c);
+  }
+  testClicks() { const f = dbFree(this.st); if (!f.length) return []; return [this.mid(pick(f))]; }
+}
+BR.registerGame({
+  id: 'dots-boxes', name: 'Dots and Boxes', tag: 'Draw lines, close boxes, steal chains.', color: '#1d9bb5', wave: 2, seats: ['First player', 'Second player'],
+  options: [{ id: 'size', label: 'Board', choices: [[3, '3×3 quick'], [4, '4×4'], [5, '5×5'], [6, '6×6 marathon']], def: 1 }],
+  howTo: ['Take turns drawing one line between two neighboring dots.', 'Draw the fourth side of a box and it is yours. You must then draw again.', 'Avoid drawing the third side of a box: your rival will snap it up, and maybe a whole chain with it.', 'Most boxes when the grid is full wins. Hard rivals know the double-cross!'],
+  controls: { pad: 'Stick/D-pad hops between lines, A draws.', key: 'Arrows/WASD hop between lines, Enter or Space draws.', touch: 'Tap between two dots.' },
+  icon(c, x, y, s) { c.fillStyle = '#fdf8ee'; rrect(c, x - s * .7, y - s * .7, s * 1.4, s * 1.4, 8); c.fill(); c.fillStyle = 'rgba(255,111,89,.35)'; c.fillRect(x - s * .45, y - s * .45, s * .45, s * .45); c.strokeStyle = '#ff6f59'; c.lineWidth = 4; c.strokeRect(x - s * .45, y - s * .45, s * .45, s * .45); c.strokeStyle = '#1d9bb5'; c.beginPath(); c.moveTo(x, y); c.lineTo(x + s * .45, y); c.lineTo(x + s * .45, y + s * .45); c.stroke(); c.fillStyle = '#12355b'; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { c.beginPath(); c.arc(x - s * .45 + i * s * .45, y - s * .45 + j * s * .45, s * .07, 0, TAU); c.fill(); } },
+  create: s => new DotsBoxes(s)
+});
+/* ================= Mancala (Kalah rules) ================= */
+/* pits 0-5 = seat 0 (bottom, left->right), 6 = seat 0 store (right); 7-12 = seat 1 (top, right->left), 13 = seat 1 store (left) */
+function mkStore(seat) { return seat ? 13 : 6; }
+function mkMoves(st) { if (st.over) return []; const o = st.turn ? 7 : 0, r = []; for (let i = 0; i < 6; i++) if (st.b[o + i] > 0) r.push(o + i); return r; }
+function mkPlay(st, pit, steps) {
+  const b = st.b.slice(), me = st.turn, skip = mkStore(1 - me); let n = b[pit], i = pit; b[pit] = 0; let cap = null;
+  if (steps) steps.push(b.slice());
+  while (n > 0) { i = (i + 1) % 14; if (i === skip) continue; b[i]++; n--; if (steps) steps.push(b.slice()); }
+  const mine = me ? i >= 7 && i <= 12 : i >= 0 && i <= 5;
+  if (mine && b[i] === 1 && b[12 - i] > 0) { cap = [i, 12 - i, b[12 - i] + 1]; b[mkStore(me)] += b[12 - i] + 1; b[12 - i] = 0; b[i] = 0; if (steps) steps.push(b.slice()); }
+  let again = i === mkStore(me), over = false;
+  const s0 = b.slice(0, 6).reduce((a, x) => a + x, 0), s1 = b.slice(7, 13).reduce((a, x) => a + x, 0);
+  if (s0 === 0 || s1 === 0) { b[6] += s0; b[13] += s1; for (let k = 0; k < 13; k++) if (k !== 6) b[k] = 0; over = true; again = false; if (steps) steps.push(b.slice()); }
+  return { b, turn: again || over ? me : 1 - me, over, again, cap, last: i };
+}
+/* minimax that handles extra turns (side to move can repeat), value from seat 0's view */
+function mkEval(st) { const b = st.b; if (st.over) return (b[6] - b[13]) * 1000; let s = (b[6] - b[13]) * 10; for (let i = 0; i < 6; i++) { s += b[i] * .6 - b[7 + i] * .6; if (b[i] === 6 - i) s += 3; if (b[7 + i] === 6 - i) s -= 3; } return s; }
+function mkSearch(st, depth, ms, noise) {
+  const t0 = now(), STOP = {}; let nodes = 0;
+  function mm(s, d, a, b) {
+    if ((++nodes & 511) === 0 && now() - t0 > ms) throw STOP;
+    if (s.over || d <= 0) return mkEval(s);
+    const max = s.turn === 0; let best = max ? -1e9 : 1e9;
+    for (const m of mkMoves(s)) { const c = mkPlay(s, m); const v = mm(c, c.again ? d : d - 1, a, b); if (max) { if (v > best) best = v; if (v > a) a = v; } else { if (v < best) best = v; if (v < b) b = v; } if (a >= b) break; }
+    return best;
+  }
+  const ms0 = mkMoves(st); if (ms0.length <= 1) return ms0[0];
+  let bestMove = ms0[0];
+  for (let d = 1; d <= depth; d++) {
+    try { let bm = null, bs = st.turn === 0 ? -1e9 : 1e9; for (const m of ms0) { const c = mkPlay(st, m); let v = mm(c, c.again ? d : d - 1, -1e9, 1e9) + (noise ? (Math.random() * 2 - 1) * noise : 0); if (st.turn === 0 ? v > bs : v < bs) { bs = v; bm = m; } } bestMove = bm; } catch (e) { if (e !== STOP) throw e; break; }
+    if (now() - t0 > ms * .5) break;
+  }
+  return bestMove;
+}
+const MKCOL = ['#ff6f59', '#1d9bb5'];
+class Mancala extends TurnGame {
+  constructor(s) { super(s); const n = +(s.opts.seeds || 4); this.st = { b: [n, n, n, n, n, n, 0, n, n, n, n, n, n, 0], turn: 0, over: false }; this.cur = { x: 0, y: 0 }; this.steps = null; this.lastPit = -1; }
+  resize(W, H) {
+    const top = BR.HUD_H + 10, aw = W - 30, ah = H - top - 20; const port = ah > aw * 1.1; this.port = port;
+    const cs = port ? Math.min(aw / 3.2, ah / 8.6) : Math.min(aw / 8.6, ah / 3.4); this.cs = cs;
+    this.bw = port ? cs * 3 : cs * 8.4; this.bh = port ? cs * 8.4 : cs * 3; this.bx = (W - this.bw) / 2; this.by = top + (ah - this.bh) / 2;
+  }
+  /* screen centre of a pit/store. Landscape: bottom row = seat 0. Portrait: board turned, seat 0 on the right column */
+  pc(i) {
+    const cs = this.cs; let col, row;
+    if (i === 6) return this.port ? [this.bx + this.bw / 2, this.by + cs * .7] : [this.bx + this.bw - cs * .7, this.by + this.bh / 2];
+    if (i === 13) return this.port ? [this.bx + this.bw / 2, this.by + this.bh - cs * .7] : [this.bx + cs * .7, this.by + this.bh / 2];
+    if (i < 6) { col = i; row = 1; } else { col = 12 - i; row = 0; }
+    if (!this.port) return [this.bx + cs * 1.4 + (col + .5) * cs * .9333, this.by + cs * (row ? 2.15 : .85)];
+    return [this.bx + cs * (row ? 2.15 : .85), this.by + this.bh - cs * 1.4 - (col + .5) * cs * .9333];
+  }
+  pitAt(x, y) { for (let i = 0; i < 14; i++) { if (i === 6 || i === 13) continue; const [px, py] = this.pc(i); if (Math.hypot(x - px, y - py) < this.cs * .46) return i; } return -1; }
+  curPit() { return this.st.turn ? 12 - this.cur.x : this.cur.x; }
+  humanInput(n) {
+    const d = this.port ? -n.dy : n.dx;
+    if (d) { this.cur.x = clamp(this.cur.x + d, 0, 5); Snd.play('move'); }
+    if (n.a) this.tryPit(this.curPit());
+  }
+  pointer(type, p) { if (!this.humanTurn() || !this.cs) return; const i = this.pitAt(p.x, p.y); if (i < 0) return; const mine = this.st.turn ? i >= 7 : i <= 5; if (!mine) return; this.cur.x = this.st.turn ? 12 - i : i; if (type === 'down') this.tryPit(i); }
+  tryPit(i) { if (mkMoves(this.st).indexOf(i) < 0) { Snd.play('error'); return; } this.commit(i); }
+  commit(pit) {
+    const prev = this.st; if (mkMoves(prev).indexOf(pit) < 0) return; const steps = []; const nx = mkPlay(prev, pit, steps); this.steps = steps; this.lastPit = pit;
+    this.anim = { t: 0, d: Math.min(2.2, .12 * steps.length + .1), done: () => {
+      this.steps = null; this.st = nx; Snd.play('place');
+      if (nx.cap) { Snd.play('capture'); const [x, y] = this.pc(mkStore(prev.turn)); this.burst(x, y, MKCOL[prev.turn], 18); this.s.rumble(prev.turn, 160, .5, .4); this.s.quip(this.s.players[prev.turn].human ? 'bad' : 'good', null, .5); BR.toast('Capture! +' + nx.cap[2]); }
+      if (nx.again && !nx.over) { Snd.play('coin'); BR.toast((this.s.players[prev.turn].human && this.s.mode === 'ai' ? 'You go' : this.s.players[prev.turn].name + ' goes') + ' again!'); }
+      if (nx.over) { const a = nx.b[6], b = nx.b[13]; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Stores ' + a + ' – ' + b, best: this.s.mode === 'ai' ? nx.b[mkStore(this.s.humanSeat)] : Math.max(a, b) }); }
+      else if (nx.turn !== prev.turn) this.cur.x = 0;
+    } };
+    let k = 0; this.animTick = () => { const idx = Math.min(steps.length - 1, Math.floor(this.anim.t * steps.length)); if (idx > k) { k = idx; Snd.play('clack'); } };
+  }
+  aiPick(seat, diff) {
+    const ms = mkMoves(this.st); if (!ms.length) return null;
+    if (diff === 'easy') { if (Math.random() < .45) return pick(ms); return mkSearch(this.st, 2, 200, 8); }
+    if (diff === 'medium') return mkSearch(this.st, 5, 400, 3);
+    return mkSearch(this.st, 14, 900, 0);
+  }
+  hud() { const b = this.steps ? this.steps[this.steps.length - 1] : this.st.b; return { score: [this.st.b[6], this.st.b[13]], turn: this.s.over ? -1 : this.st.turn, status: this.status(), colors: MKCOL }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'Stick/D-pad: pick a pit · Ⓐ sow' : L === 'key' ? 'Arrows: pick a pit · Enter sow' : 'Tap one of your pits to sow its stones'; }
+  update(dt) { super.update(dt); if (this.anim && this.animTick) this.animTick(); }
+  draw(c, W, H) {
+    if (!this.cs) this.resize(W, H); const cs = this.cs, t = this.t;
+    BR.tableBG(c, W, H, '#c98b4f', '#5b3416');
+    c.fillStyle = 'rgba(0,0,0,.3)'; rrect(c, this.bx + 6, this.by + 10, this.bw, this.bh, cs * .6); c.fill();
+    const g = c.createLinearGradient(this.bx, this.by, this.bx + this.bw, this.by + this.bh); g.addColorStop(0, '#a8703f'); g.addColorStop(1, '#7a4a24'); c.fillStyle = g; rrect(c, this.bx, this.by, this.bw, this.bh, cs * .6); c.fill();
+    c.strokeStyle = 'rgba(255,220,170,.25)'; c.lineWidth = 2; for (let k = 1; k < 7; k++) { c.beginPath(); if (this.port) { c.moveTo(this.bx + k * this.bw / 7, this.by + 10); c.lineTo(this.bx + k * this.bw / 7 + 6, this.by + this.bh - 10); } else { c.moveTo(this.bx + 10, this.by + k * this.bh / 7); c.lineTo(this.bx + this.bw - 10, this.by + k * this.bh / 7 + 4); } c.stroke(); }
+    const b = this.steps ? this.steps[Math.min(this.steps.length - 1, Math.floor((this.anim ? this.anim.t : 1) * this.steps.length))] : this.st.b;
+    const legal = this.humanTurn() ? mkMoves(this.st) : [];
+    for (let i = 0; i < 14; i++) {
+      const [x, y] = this.pc(i), store = i === 6 || i === 13, owner = i <= 6 ? 0 : 1;
+      c.fillStyle = 'rgba(40,20,5,.55)';
+      if (store) { const w = this.port ? cs * 2.3 : cs * .95, h = this.port ? cs * .95 : cs * 2.5; rrect(c, x - w / 2, y - h / 2, w, h, cs * .45); c.fill(); c.strokeStyle = MKCOL[owner]; c.lineWidth = 3; c.stroke(); }
+      else { c.beginPath(); c.arc(x, y, cs * .4, 0, TAU); c.fill(); if (legal.includes(i)) { c.strokeStyle = 'rgba(255,209,102,.6)'; c.lineWidth = 3; c.stroke(); } }
+      // stones
+      const n = b[i]; const R = store ? cs * .32 : cs * .27;
+      for (let k = 0; k < Math.min(n, 24); k++) { const a = k * 2.399 + i, rr = R * Math.sqrt((k + .5) / Math.max(n, 6)); const sx = x + Math.cos(a) * rr * (store && !this.port ? .8 : store ? 2 : 1), sy = y + Math.sin(a) * rr * (store && !this.port ? 2.2 : store ? .8 : 1); c.fillStyle = ['#7bdff2', '#ffd166', '#b388ff', '#3cc9a4', '#ff8fab'][(k + i) % 5]; c.beginPath(); c.arc(sx, sy, cs * .075, 0, TAU); c.fill(); c.fillStyle = 'rgba(255,255,255,.5)'; c.beginPath(); c.arc(sx - cs * .02, sy - cs * .02, cs * .025, 0, TAU); c.fill(); }
+      c.fillStyle = '#fff4dc'; c.font = '900 ' + Math.round(cs * (store ? .3 : .2)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      if (store) { c.save(); c.strokeStyle = 'rgba(40,20,5,.8)'; c.lineWidth = 5; c.strokeText(n, x, y); c.fillText(n, x, y); c.restore(); }
+      else if (this.port) c.fillText(n, x + (owner ? -cs * .62 : cs * .62), y); else c.fillText(n, x, y + (owner ? -cs * .55 : cs * .55));
+    }
+    if (this.humanTurn() && BR.showCursor()) { const [x, y] = this.pc(this.curPit()); BR.drawCursor(c, x - cs * .47, y - cs * .47, cs * .94, cs * .94, t, MKCOL[this.st.turn]); }
+    this.drawFx(c);
+  }
+  testClicks() { const ms = mkMoves(this.st); if (!ms.length) return []; return [this.pc(pick(ms))]; }
+}
+BR.registerGame({
+  id: 'mancala', name: 'Mancala', tag: 'Sow your stones and capture the pits.', color: '#a8703f', wave: 2, seats: ['Bottom row (first)', 'Top row (second)'],
+  options: [{ id: 'seeds', label: 'Stones per pit', choices: [[3, '3 (quick)'], [4, '4 (classic)'], [5, '5'], [6, '6 (long)']], def: 1 }],
+  howTo: ['Kalah rules. Pick one of your six pits: its stones are sown one at a time counter-clockwise into the following pits, including your own store but never your rival\'s.', 'Last stone lands in your store? Take another turn.', 'Last stone lands in an empty pit on your side? Capture it plus every stone in the pit straight across.', 'When either side runs out of stones, the other side banks what is left. Most stones in the store wins.'],
+  controls: { pad: 'Stick/D-pad to choose a pit, A to sow.', key: 'Arrows/WASD to choose a pit, Enter or Space to sow.', touch: 'Tap one of your pits.' },
+  icon(c, x, y, s) { c.fillStyle = '#7a4a24'; rrect(c, x - s * .85, y - s * .45, s * 1.7, s * .9, s * .4); c.fill(); for (let k = 0; k < 3; k++) for (let r = 0; r < 2; r++) { c.fillStyle = '#4a2a10'; c.beginPath(); c.arc(x - s * .4 + k * s * .4, y - s * .18 + r * s * .36, s * .14, 0, TAU); c.fill(); c.fillStyle = ['#7bdff2', '#ffd166', '#ff8fab'][(k + r) % 3]; c.beginPath(); c.arc(x - s * .4 + k * s * .4, y - s * .18 + r * s * .36, s * .06, 0, TAU); c.fill(); } },
+  create: s => new Mancala(s)
+});
+/* ================= Pong (real-time, split-screen touch, 2 pads) ================= */
+const PG = { L: 160, W: 100, PH: 18, PW: 3, PX: 8, BR: 2.2, V0: 70, VMAX: 190 };
+const PGCOL = ['#ff6f59', '#3cc9a4'];
+class Pong {
+  constructor(s) {
+    this.s = s; this.t = 0; this.score = [0, 0]; this.to = +(s.opts.points || 7); this.fx = []; this.trail = []; this.ptrs = {}; this.flash = 0; this.flashTxt = ''; this.rally = 0; this.best = 0;
+    this.p = [{ y: PG.W / 2, ty: PG.W / 2, v: 0 }, { y: PG.W / 2, ty: PG.W / 2, v: 0 }];
+    this.ai = [0, 1].map(i => s.players[i].human ? null : { p: { easy: { sp: 75, re: .26, er: 4.5, pred: .6 }, medium: { sp: 105, re: .16, er: 3, pred: .85 }, hard: { sp: 150, re: .06, er: 1.4, pred: 1 } }[s.players[i].diff], next: 0, aimY: PG.W / 2, off: 0 });
+    this.serve(ri(2));
+  }
+  serve(to) { const dir = to === 0 ? -1 : 1, a = rnd(-.5, .5); this.ball = { x: PG.L / 2, y: PG.W / 2 + rnd(-20, 20), vx: Math.cos(a) * PG.V0 * dir, vy: Math.sin(a) * PG.V0, spin: 0 }; this.pause = this.s.fast ? .05 : 1.1; this.rally = 0; this.trail = []; }
+  resize(W, H) {
+    this.W = W; this.H = H; const top = BR.HUD_H + 6; this.port = H > W * 1.05;
+    if (!this.port) { const s = Math.min((W - 30) / PG.L, (H - top - 20) / PG.W); this.sc = s; this.ox = (W - PG.L * s) / 2; this.oy = top + (H - top - PG.W * s) / 2; }
+    else { const s = Math.min((W - 24) / PG.W, (H - top - 20) / PG.L); this.sc = s; this.ox = (W - PG.W * s) / 2; this.oy = top + (H - top - PG.L * s) / 2; }
+  }
+  ts(x, y) { return this.port ? [this.ox + y * this.sc, this.oy + (PG.L - x) * this.sc] : [this.ox + x * this.sc, this.oy + y * this.sc]; }
+  st(sx, sy) { return this.port ? [PG.L - (sy - this.oy) / this.sc, (sx - this.ox) / this.sc] : [(sx - this.ox) / this.sc, (sy - this.oy) / this.sc]; }
+  pointer(type, p) {
+    if (!this.sc) return; const [x, y] = this.st(p.x, p.y);
+    if (type === 'down') { const seat = this.s.mode === 'ai' ? this.s.humanSeat : (x < PG.L / 2 ? 0 : 1); if (seat < 0 || !this.s.players[seat].human) return; this.ptrs[p.id] = seat; }
+    if (type === 'move' && p.type === 'mouse' && this.ptrs[p.id] == null) { const seat = this.s.mode === 'ai' ? this.s.humanSeat : (this.s.mode === 'local' ? (x < PG.L / 2 ? 0 : 1) : -1); if (seat >= 0) this.p[seat].ty = y; return; }
+    const seat = this.ptrs[p.id]; if (seat == null) return; if (type === 'up') { delete this.ptrs[p.id]; return; } this.p[seat].ty = y;
+  }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < f.d); this.flash = Math.max(0, this.flash - dt);
+    if (this.s.over) return;
+    for (let i = 0; i < 2; i++) {
+      const P = this.p[i], oy = P.y; let ms = 230;
+      if (this.ai[i]) { this.aiStep(i, dt); ms = this.ai[i].p.sp; }
+      else { const a = Input.analog(this.s.ctrl(i)); const ax = this.port ? a.x : a.y; if (ax) P.ty = P.y + ax * 160 * dt * 1.6; }
+      P.ty = clamp(P.ty, PG.PH / 2, PG.W - PG.PH / 2); const d = P.ty - P.y; P.y += clamp(d, -ms * dt, ms * dt); P.v = (P.y - oy) / Math.max(dt, 1e-3);
+    }
+    if (this.pause > 0) { this.pause -= dt; return; }
+    const B = this.ball, n = 4, h = dt / n;
+    for (let k = 0; k < n; k++) {
+      B.vy += B.spin * h * 60; B.spin *= Math.pow(.4, h);
+      B.x += B.vx * h; B.y += B.vy * h;
+      if (B.y < PG.BR) { B.y = PG.BR; B.vy = Math.abs(B.vy); Snd.play('wall'); } else if (B.y > PG.W - PG.BR) { B.y = PG.W - PG.BR; B.vy = -Math.abs(B.vy); Snd.play('wall'); }
+      for (let i = 0; i < 2; i++) {
+        const px = i === 0 ? PG.PX : PG.L - PG.PX, dir = i === 0 ? 1 : -1, P = this.p[i];
+        if ((B.vx * dir) < 0 && Math.abs(B.x - px) < PG.PW / 2 + PG.BR && Math.abs(B.y - P.y) < PG.PH / 2 + PG.BR) {
+          const off = clamp((B.y - P.y) / (PG.PH / 2), -1, 1); const sp = Math.min(PG.VMAX, Math.hypot(B.vx, B.vy) * 1.06 + 2); const ang = off * 1.0;
+          B.vx = Math.cos(ang) * sp * dir; B.vy = Math.sin(ang) * sp; B.spin = clamp(P.v / 160, -1, 1) * .9; B.x = px + dir * (PG.PW / 2 + PG.BR);
+          this.rally++; this.best = Math.max(this.best, this.rally); Snd.play('puck', .6 + sp / PG.VMAX); this.s.rumble(i, 50, .3 + sp / PG.VMAX * .4, .3); this.hitBy = i;
+          if (Math.abs(off) > .8 || Math.abs(B.spin) > .6) this.burst(B.x, B.y, PGCOL[i]);
+        }
+      }
+      if (B.x < -4) return this.point(1); if (B.x > PG.L + 4) return this.point(0);
+    }
+    if (!S().settings.reduced) { this.trail.push([B.x, B.y]); if (this.trail.length > 8) this.trail.shift(); }
+  }
+  burst(x, y, col) { const [sx, sy] = this.ts(x, y); for (let i = 0; i < 8; i++) { const a = Math.random() * TAU, v = rnd(40, 140); this.fx.push({ x: sx, y: sy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, col, t: 0, d: rnd(.3, .6) }); } }
+  point(seat) {
+    this.score[seat]++; Snd.play('goal'); this.flash = 1.2; this.flashTxt = this.rally >= 10 ? 'RALLY ' + this.rally + '!' : 'POINT!'; this.s.rumble(1 - seat, 350, .9, .7); this.s.rumble(seat, 150, .3, .5);
+    if (this.score[seat] >= this.to && this.score[seat] - this.score[1 - seat] >= 2) { this.s.end(seat, { detail: 'Final ' + this.score[0] + ' – ' + this.score[1] + ' · longest rally ' + this.best, best: this.best }); return; }
+    if (this.score[seat] >= this.to - 1 && this.score[1 - seat] >= this.to - 1 && this.score[0] === this.score[1]) BR.toast('Deuce! Win by two'); else if (this.score[seat] === this.to - 1) BR.toast('Game point!');
+    this.s.quip(this.s.players[seat].human ? 'bad' : 'good', null, .5); this.serve(1 - seat);
+  }
+  aiStep(i, dt) {
+    const A = this.ai[i], p = A.p, B = this.ball, P = this.p[i]; A.next -= dt; if (A.next > 0) { P.ty = A.aimY; return; } A.next = p.re;
+    const px = i === 0 ? PG.PX : PG.L - PG.PX, coming = i === 0 ? B.vx < 0 : B.vx > 0;
+    if (coming && Math.abs(B.vx) > 1) { const tt = (px - B.x) / B.vx; let y = B.y + (B.vy + B.spin * 20) * tt * p.pred + (1 - p.pred) * (B.y - P.y) * .2; const span = PG.W - 2 * PG.BR; let yy = ((y - PG.BR) % (2 * span) + 2 * span) % (2 * span); if (yy > span) yy = 2 * span - yy; y = yy + PG.BR; if (A.off === undefined || A.lastHit !== this.rally) { const sp = Math.hypot(B.vx, B.vy), e = p.er * (1 + sp / 70) * (1 + this.rally * .04) * (1 + Math.abs(B.spin)); A.off = (Math.random() + Math.random() - 1) * e * 1.6 + (this.s.players[i].diff === 'hard' ? rnd(-5, 5) : 0); A.lastHit = this.rally; } A.aimY = y + A.off; }
+    else A.aimY = lerp(P.y, PG.W / 2, .3);
+    P.ty = A.aimY;
+  }
+  hud() { return { score: this.score, turn: -1, colors: PGCOL, status: this.pause > 0 && !this.s.over ? 'Get ready…' : 'First to ' + this.to + ' (win by 2)' }; }
+  hint() { if (this.s.mode !== 'local') return BR.inputLabel() === 'touch' ? 'Drag to move your paddle' : ''; return Input.connected().length >= 2 ? '' : (BR.inputLabel() === 'touch' ? 'Each player drags on their own side' : this.port ? 'P1: A/D · P2: ←/→' : 'P1: W/S · P2: ↑/↓'); }
+  draw(c, W, H) {
+    if (!this.sc || this.W !== W || this.H !== H) this.resize(W, H); const s = this.sc;
+    c.fillStyle = '#0b1622'; c.fillRect(0, 0, W, H);
+    const [x0, y0] = this.ts(0, 0), [x1, y1] = this.ts(PG.L, PG.W); const L = Math.min(x0, x1), T = Math.min(y0, y1), Wd = Math.abs(x1 - x0), Hd = Math.abs(y1 - y0);
+    const g = c.createLinearGradient(L, T, L, T + Hd); g.addColorStop(0, '#12355b'); g.addColorStop(1, '#0d2440'); c.fillStyle = g; rrect(c, L - 6, T - 6, Wd + 12, Hd + 12, 14); c.fill();
+    c.strokeStyle = 'rgba(123,223,242,.8)'; c.shadowColor = '#7bdff2'; c.shadowBlur = S().settings.reduced ? 0 : 10; c.lineWidth = 3; rrect(c, L - 6, T - 6, Wd + 12, Hd + 12, 14); c.stroke(); c.shadowBlur = 0;
+    c.setLineDash([8, 10]); c.strokeStyle = 'rgba(255,255,255,.3)'; c.lineWidth = 3; const [m0, m1] = this.ts(PG.L / 2, 0), [m2, m3] = this.ts(PG.L / 2, PG.W); c.beginPath(); c.moveTo(m0, m1); c.lineTo(m2, m3); c.stroke(); c.setLineDash([]);
+    c.fillStyle = 'rgba(255,255,255,.08)'; c.font = '900 ' + Math.round(PG.W * s * .35) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = 0; i < 2; i++) { const [sx, sy] = this.ts(i === 0 ? PG.L * .25 : PG.L * .75, PG.W / 2); c.fillText(this.score[i], sx, sy); }
+    for (let k = 0; k < this.trail.length; k++) { const [tx, ty] = this.ts(this.trail[k][0], this.trail[k][1]); c.fillStyle = 'rgba(255,209,102,' + (k / this.trail.length * .35) + ')'; c.beginPath(); c.arc(tx, ty, PG.BR * s * (k / this.trail.length), 0, TAU); c.fill(); }
+    for (let i = 0; i < 2; i++) { const px = i === 0 ? PG.PX : PG.L - PG.PX, P = this.p[i]; const [a, b] = this.ts(px - PG.PW / 2, P.y - PG.PH / 2), [cc, d] = this.ts(px + PG.PW / 2, P.y + PG.PH / 2); c.fillStyle = PGCOL[i]; c.shadowColor = PGCOL[i]; c.shadowBlur = S().settings.reduced ? 0 : 14; rrect(c, Math.min(a, cc), Math.min(b, d), Math.abs(cc - a), Math.abs(d - b), 4); c.fill(); c.shadowBlur = 0; }
+    const B = this.ball, [bx, by] = this.ts(B.x, B.y); c.fillStyle = '#ffd166'; c.beginPath(); c.arc(bx, by, PG.BR * s, 0, TAU); c.fill(); if (this.pause > 0 && !this.s.over) { c.strokeStyle = 'rgba(255,209,102,' + (.5 + Math.sin(this.t * 10) * .4) + ')'; c.lineWidth = 2; c.beginPath(); c.arc(bx, by, PG.BR * s * 2.2, 0, TAU); c.stroke(); }
+    for (const f of this.fx) { const k = f.t; c.globalAlpha = Math.max(0, 1 - k / f.d); c.fillStyle = f.col; c.beginPath(); c.arc(f.x + f.vx * k, f.y + f.vy * k, 3, 0, TAU); c.fill(); } c.globalAlpha = 1;
+    if (this.flash > 0) { c.save(); c.globalAlpha = Math.min(1, this.flash); c.fillStyle = '#ffd166'; c.strokeStyle = '#12355b'; c.lineWidth = 8; c.font = '900 ' + Math.min(W, H) * .12 + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.strokeText(this.flashTxt, W / 2, H / 2); c.fillText(this.flashTxt, W / 2, H / 2); c.restore(); }
+    if (this.s.mode === 'local' && this.t < 4 && !this.s.fast) { c.fillStyle = 'rgba(255,255,255,.6)'; c.font = '900 16px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; for (let i = 0; i < 2; i++) { const [px, py] = this.ts(i === 0 ? PG.L * .25 : PG.L * .75, PG.W * .2); c.fillText(this.s.players[i].name, px, py); } }
+  }
+  testInfo() { return { over: this.s.over, score: this.score.slice(), ball: [this.ball.x, this.ball.y, this.ball.vx, this.ball.vy], paddles: this.p.map(P => P.y), human: false, port: this.port }; }
+  destroy() { }
+}
+BR.registerGame({
+  id: 'pong', name: 'Pong', tag: 'The original paddle duel, boardwalk style.', color: '#3cc9a4', wave: 2, realtime: true,
+  options: [{ id: 'points', label: 'Play to', choices: [[5, '5'], [7, '7'], [11, '11']], def: 1 }],
+  localNote: 'Same iPad? Each player drags on their own side. Or two controllers, or W/S vs. ↑/↓.',
+  howTo: ['Keep the ball out of your goal and sneak it past your rival.', 'Hit the ball near the end of your paddle for a steep angle. The ball speeds up every hit.', 'Move the paddle as you hit to add spin: the ball curves!', 'First to the target score wins, but you must win by two.'],
+  controls: { pad: 'Left stick or D-pad up/down moves your paddle. Two controllers = one each.', key: 'Player 1: W/S. Player 2: ↑/↓ (vs computer, either works).', touch: 'Drag anywhere on your side to move your paddle.' },
+  icon(c, x, y, s) { c.fillStyle = '#12355b'; rrect(c, x - s * .8, y - s * .55, s * 1.6, s * 1.1, 8); c.fill(); c.fillStyle = '#ff6f59'; c.fillRect(x - s * .65, y - s * .3, s * .12, s * .45); c.fillStyle = '#3cc9a4'; c.fillRect(x + s * .53, y - s * .05, s * .12, s * .45); c.fillStyle = '#ffd166'; c.beginPath(); c.arc(x + s * .05, y - s * .05, s * .1, 0, TAU); c.fill(); c.strokeStyle = 'rgba(255,255,255,.4)'; c.setLineDash([3, 4]); c.beginPath(); c.moveTo(x, y - s * .5); c.lineTo(x, y + s * .5); c.stroke(); c.setLineDash([]); },
+  create: s => new Pong(s)
+});
+/* ================= Tank Duel (top-down arena, destructible cover) ================= */
+const TK = { L: 160, W: 100, C: 10, GX: 16, GY: 10, R: 5, SP: 40, SHOT: 115, RELOAD: .45, MAXS: 3, HP: 3 };
+const TKCOL = ['#ff6f59', '#1d9bb5'];
+function tkMap() {
+  for (let tries = 0; tries < 40; tries++) {
+    const g = Array(TK.GX * TK.GY).fill(0);
+    for (let x = 0; x < TK.GX / 2; x++) for (let y = 0; y < TK.GY; y++) {
+      if (x <= 2 && y >= 3 && y <= 6) continue; const r = Math.random(); let v = 0;
+      if (x >= 3 && r < .07) v = 2; else if (r < .26) v = 1;
+      g[y * TK.GX + x] = v; g[(TK.GY - 1 - y) * TK.GX + (TK.GX - 1 - x)] = v;
+    }
+    // reachability ignoring crates
+    const seen = new Set([4 * TK.GX + 1]), q = [4 * TK.GX + 1]; while (q.length) { const c = q.shift(), cx = c % TK.GX, cy = (c / TK.GX) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= TK.GX || ny >= TK.GY) continue; const k = ny * TK.GX + nx; if (g[k] === 2 || seen.has(k)) continue; seen.add(k); q.push(k); } }
+    if (seen.has(5 * TK.GX + 14)) return g;
+  }
+  return Array(TK.GX * TK.GY).fill(0);
+}
+class TankDuel {
+  constructor(s) {
+    this.s = s; this.t = 0; this.rounds = [0, 0]; this.need = +(s.opts.rounds || 3); this.map = tkMap(); this.fx = []; this.ptrs = {}; this.flash = 0; this.flashTxt = ''; this.shots = []; this.marks = [];
+    this.ai = [0, 1].map(i => s.players[i].human ? null : { p: { easy: { re: .45, err: .28, fire: 1.0, bank: false, dodge: .15, lead: 0 }, medium: { re: .22, err: .1, fire: .65, bank: false, dodge: .45, lead: .5 }, hard: { re: .1, err: .035, fire: .45, bank: true, dodge: .85, lead: 1 } }[s.players[i].diff], next: 0, ix: 0, iy: 0, fire: false, lastFire: 0, aimA: null });
+    this.newRound();
+  }
+  newRound() {
+    this.hp0 = this.map.map(v => v === 1 ? 3 : v === 2 ? 99 : 0); this.hp = this.hp0.slice();
+    this.tk = [{ x: 15, y: 50, a: 0, hp: TK.HP, cd: 0, alive: true, hit: 0, tr: 0 }, { x: TK.L - 15, y: 50, a: Math.PI, hp: TK.HP, cd: 0, alive: true, hit: 0, tr: 0 }];
+    this.shots = []; this.marks = []; this.pause = this.s.fast ? .05 : 1.3; this.roundOver = false;
+  }
+  resize(W, H) {
+    this.W = W; this.H = H; const top = BR.HUD_H + 6; this.port = H > W * 1.05;
+    if (!this.port) { const s = Math.min((W - 24) / TK.L, (H - top - 16) / TK.W); this.sc = s; this.ox = (W - TK.L * s) / 2; this.oy = top + (H - top - TK.W * s) / 2; }
+    else { const s = Math.min((W - 20) / TK.W, (H - top - 16) / TK.L); this.sc = s; this.ox = (W - TK.W * s) / 2; this.oy = top + (H - top - TK.L * s) / 2; }
+  }
+  ts(x, y) { return this.port ? [this.ox + y * this.sc, this.oy + (TK.L - x) * this.sc] : [this.ox + x * this.sc, this.oy + y * this.sc]; }
+  st(sx, sy) { return this.port ? [TK.L - (sy - this.oy) / this.sc, (sx - this.ox) / this.sc] : [(sx - this.ox) / this.sc, (sy - this.oy) / this.sc]; }
+  vecW(sx, sy) { return this.port ? [-sy, sx] : [sx, sy]; }
+  solid(x, y) { if (x < 0 || y < 0 || x >= TK.L || y >= TK.W) return 3; const k = Math.floor(y / TK.C) * TK.GX + Math.floor(x / TK.C); return this.hp[k] > 0 ? this.map[k] : 0; }
+  pointer(type, p) {
+    if (!this.sc) return; const [wx] = this.st(p.x, p.y);
+    if (type === 'down') { const seat = this.s.mode === 'ai' ? this.s.humanSeat : (wx < TK.L / 2 ? 0 : 1); if (seat < 0 || !this.s.players[seat].human) return; this.ptrs[p.id] = { seat, x0: p.x, y0: p.y, x: p.x, y: p.y, t0: this.t, moved: 0, ord: now() }; return; }
+    const P = this.ptrs[p.id]; if (!P) return;
+    if (type === 'move') { P.x = p.x; P.y = p.y; P.moved = Math.max(P.moved, Math.hypot(p.x - P.x0, p.y - P.y0)); return; }
+    if (type === 'up') { if (P.moved < 14 && this.t - P.t0 < .35) this.fire(P.seat); delete this.ptrs[p.id]; }
+  }
+  touchStick(seat) { let best = null; for (const k in this.ptrs) { const P = this.ptrs[k]; if (P.seat === seat && (!best || P.ord < best.ord)) best = P; } if (!best || best.moved < 10) return null; const dx = (best.x - best.x0) / 45, dy = (best.y - best.y0) / 45; const m = Math.hypot(dx, dy); const [wx, wy] = this.vecW(dx / Math.max(1, m), dy / Math.max(1, m)); return [wx, wy]; }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < f.d); this.flash = Math.max(0, this.flash - dt);
+    if (this.s.over) return;
+    if (this.pause > 0) { this.pause -= dt; if (this.pause <= 0 && this.roundOver) this.newRound(); return; }
+    for (let i = 0; i < 2; i++) {
+      const T = this.tk[i]; if (!T.alive) continue; T.cd = Math.max(0, T.cd - dt); T.hit = Math.max(0, T.hit - dt); let ix = 0, iy = 0, fire = false;
+      if (this.ai[i]) { this.aiStep(i, dt); ix = this.ai[i].ix; iy = this.ai[i].iy; fire = this.ai[i].fire; this.ai[i].fire = false; }
+      else {
+        const ctrl = this.s.ctrl(i), a = Input.analog(ctrl); [ix, iy] = this.vecW(a.x, a.y);
+        const ts = this.touchStick(i); if (ts) [ix, iy] = ts;
+        for (const p of ctrl.pads || []) if (p && p.conn && (Input.hit(p, 0) || Input.hit(p, 7) || Input.hit(p, 5))) fire = true;
+        if (ctrl.keys === 'k1' || ctrl.keys === 'any') { if (Input.keyHit('Space', 'KeyF')) fire = true; }
+        if (ctrl.keys === 'k2' || ctrl.keys === 'any') { if (Input.keyHit('Enter', 'ShiftRight', 'Slash')) fire = true; }
+      }
+      this.drive(T, ix, iy, dt); if (fire) this.fire(i);
+    }
+    // tank vs tank
+    const A = this.tk[0], B = this.tk[1]; const dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy); if (d < TK.R * 2 && d > .01) { const push = (TK.R * 2 - d) / 2; A.x -= dx / d * push; A.y -= dy / d * push; B.x += dx / d * push; B.y += dy / d * push; this.collide(A); this.collide(B); }
+    this.stepShots(dt);
+  }
+  drive(T, ix, iy, dt) {
+    const m = Math.min(1, Math.hypot(ix, iy)); if (m < .15) return;
+    let ta = Math.atan2(iy, ix), diff = Math.atan2(Math.sin(ta - T.a), Math.cos(ta - T.a)), back = false;
+    if (Math.abs(diff) > 2.3) { back = true; ta += Math.PI; diff = Math.atan2(Math.sin(ta - T.a), Math.cos(ta - T.a)); }
+    T.a += clamp(diff, -4.2 * dt, 4.2 * dt);
+    const go = Math.max(0, (m - .35) / .65) * Math.max(0, Math.cos(diff)) * (back ? -.6 : 1); if (!go) return;
+    T.x += Math.cos(T.a) * TK.SP * go * dt; T.y += Math.sin(T.a) * TK.SP * go * dt; this.collide(T);
+    T.tr += Math.abs(go) * dt; if (T.tr > .12 && !S().settings.reduced) { T.tr = 0; this.marks.push([T.x, T.y, T.a]); if (this.marks.length > 160) this.marks.shift(); }
+  }
+  collide(T) {
+    const r = TK.R; T.x = clamp(T.x, r, TK.L - r); T.y = clamp(T.y, r, TK.W - r);
+    const cx = Math.floor(T.x / TK.C), cy = Math.floor(T.y / TK.C);
+    for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+      if (gx < 0 || gy < 0 || gx >= TK.GX || gy >= TK.GY) continue; const k = gy * TK.GX + gx; if (!(this.hp[k] > 0 && this.map[k])) continue;
+      const nx = clamp(T.x, gx * TK.C, gx * TK.C + TK.C), ny = clamp(T.y, gy * TK.C, gy * TK.C + TK.C); const dx = T.x - nx, dy = T.y - ny, d = Math.hypot(dx, dy);
+      if (d < r) { if (d > 1e-4) { T.x = nx + dx / d * r; T.y = ny + dy / d * r; } else { T.x += r; } }
+    }
+  }
+  fire(i) {
+    const T = this.tk[i]; if (!T.alive || T.cd > 0 || this.pause > 0 || this.shots.filter(s => s.o === i).length >= TK.MAXS) return;
+    const mx = T.x + Math.cos(T.a) * (TK.R + 2.5), my = T.y + Math.sin(T.a) * (TK.R + 2.5); if (this.solid(mx, my) === 2 || this.solid(mx, my) === 3) { T.cd = .2; return; }
+    T.cd = TK.RELOAD; this.shots.push({ x: mx, y: my, vx: Math.cos(T.a) * TK.SHOT, vy: Math.sin(T.a) * TK.SHOT, o: i, b: 0, life: 4 }); Snd.play('puck', .5); this.s.rumble(i, 60, .35, .2);
+    const [sx, sy] = this.ts(mx, my); for (let k = 0; k < 5; k++) this.fx.push({ x: sx, y: sy, vx: rnd(-40, 40), vy: rnd(-40, 40), col: '#ffd166', t: 0, d: .25 });
+  }
+  stepShots(dt) {
+    const n = 4, h = dt / n;
+    for (const S0 of this.shots) {
+      for (let k = 0; k < n && S0.life > 0; k++) {
+        const ox = S0.x, oy = S0.y; S0.x += S0.vx * h; S0.y += S0.vy * h; S0.life -= h;
+        const sv = this.solid(S0.x, S0.y);
+        if (sv === 1) { const kk = Math.floor(S0.y / TK.C) * TK.GX + Math.floor(S0.x / TK.C); this.hp[kk]--; S0.life = 0; Snd.play('thunk'); this.boom(S0.x, S0.y, this.hp[kk] <= 0 ? 18 : 6, '#c9a066'); if (this.hp[kk] <= 0) Snd.play('capture'); break; }
+        if (sv === 2 || sv === 3) {
+          if (S0.b >= 1) { S0.life = 0; this.boom(S0.x, S0.y, 5, '#ddd'); break; }
+          S0.b++; Snd.play('wall');
+          const hx = this.solid(S0.x, oy), hy = this.solid(ox, S0.y);
+          if (hx >= 2 && hy < 2) S0.vx = -S0.vx; else if (hy >= 2 && hx < 2) S0.vy = -S0.vy; else { S0.vx = -S0.vx; S0.vy = -S0.vy; }
+          S0.x = ox; S0.y = oy; continue;
+        }
+        for (let i = 0; i < 2; i++) { const T = this.tk[i]; if (!T.alive) continue; if (i === S0.o && S0.b === 0) continue; if (Math.hypot(T.x - S0.x, T.y - S0.y) < TK.R + 1.2) { S0.life = 0; this.hitTank(i, S0.o); break; } }
+        if (S0.life <= 0) break;
+      }
+    }
+    // shell vs shell
+    for (let a = 0; a < this.shots.length; a++) for (let b = a + 1; b < this.shots.length; b++) { const A = this.shots[a], B = this.shots[b]; if (A.life > 0 && B.life > 0 && Math.hypot(A.x - B.x, A.y - B.y) < 2.4) { A.life = B.life = 0; this.boom(A.x, A.y, 8, '#ffd166'); Snd.play('clack'); } }
+    this.shots = this.shots.filter(s => s.life > 0);
+  }
+  boom(x, y, n, col) { const [sx, sy] = this.ts(x, y); if (S().settings.reduced) n = Math.min(n, 5); for (let k = 0; k < n; k++) { const a = Math.random() * TAU, v = rnd(30, 130); this.fx.push({ x: sx, y: sy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, col, t: 0, d: rnd(.3, .7) }); } }
+  hitTank(i, by) {
+    const T = this.tk[i]; T.hp--; T.hit = .4; Snd.play('boom'); this.boom(T.x, T.y, 14, TKCOL[i]); this.s.rumble(i, 300, 1, .7); if (by !== i) this.s.rumble(by, 120, .3, .4);
+    if (T.hp > 0) { this.s.quip(this.s.players[i].human ? 'good' : 'bad', null, .3); return; }
+    T.alive = false; this.boom(T.x, T.y, 40, '#ffd166'); Snd.play('sink');
+    const w = 1 - i; this.rounds[w]++; this.flash = 1.4; this.flashTxt = (this.s.players[w].human && this.s.mode === 'ai' ? 'YOU' : this.s.players[w].name.split(' ')[0].toUpperCase()) + ' TAKES IT!';
+    if (by === i) this.flashTxt = 'SELF-HIT!';
+    if (this.rounds[w] >= this.need) { this.s.end(w, { detail: 'Rounds ' + this.rounds[0] + ' – ' + this.rounds[1] }); return; }
+    this.s.quip(this.s.players[w].human ? 'bad' : 'good', null, .6); this.roundOver = true; this.pause = this.s.fast ? .05 : 1.8;
+  }
+  los(x0, y0, x1, y1) { const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 2); for (let k = 1; k < n; k++) { const x = lerp(x0, x1, k / n), y = lerp(y0, y1, k / n); if (this.solid(x, y)) return false; } return true; }
+  simShot(x, y, a, me, foe) {
+    let vx = Math.cos(a) * 2, vy = Math.sin(a) * 2, b = 0; x += Math.cos(a) * (TK.R + 2.5); y += Math.sin(a) * (TK.R + 2.5);
+    for (let k = 0; k < 150; k++) { const ox = x, oy = y; x += vx; y += vy; const sv = this.solid(x, y); if (sv === 1) return -1; if (sv >= 2) { if (b) return -1; b++; const hx = this.solid(x, oy), hy = this.solid(ox, y); if (hx >= 2 && hy < 2) vx = -vx; else if (hy >= 2 && hx < 2) vy = -vy; else { vx = -vx; vy = -vy; } x = ox; y = oy; continue; } if (Math.hypot(foe.x - x, foe.y - y) < TK.R) return k; if (b && Math.hypot(me.x - x, me.y - y) < TK.R + 2) return -1; }
+    return -1;
+  }
+  aiStep(i, dt) {
+    const A = this.ai[i], p = A.p, me = this.tk[i], foe = this.tk[1 - i]; A.next -= dt;
+    // keep turning toward the current aim every frame
+    if (A.aimA != null) { const diff = Math.atan2(Math.sin(A.aimA - me.a), Math.cos(A.aimA - me.a)); if (Math.abs(diff) < .09 && this.t - A.lastFire > p.fire) { A.fire = true; A.lastFire = this.t; if (A.shootOnce) A.aimA = null; } else if (A.mode === 'aim') { A.ix = Math.cos(A.aimA) * .3; A.iy = Math.sin(A.aimA) * .3; } }
+    if (A.next > 0) return; A.next = p.re + rnd(0, p.re * .5);
+    if (!foe.alive) { A.ix = A.iy = 0; return; }
+    // dodge incoming shells
+    for (const s of this.shots) { if (s.o === i && s.b === 0) continue; const rx = me.x - s.x, ry = me.y - s.y, sp = Math.hypot(s.vx, s.vy); const tt = (rx * s.vx + ry * s.vy) / (sp * sp); if (tt < 0 || tt > .7) continue; const cx = s.x + s.vx * tt - me.x, cy = s.y + s.vy * tt - me.y; if (Math.hypot(cx, cy) < 8 && Math.random() < p.dodge) { const px = -s.vy / sp, py = s.vx / sp, sg = (cx * px + cy * py) > 0 ? -1 : 1; A.ix = px * sg; A.iy = py * sg; A.mode = 'dodge'; A.aimA = null; return; } }
+    // direct shot
+    const dist = Math.hypot(foe.x - me.x, foe.y - me.y);
+    if (this.los(me.x, me.y, foe.x, foe.y)) {
+      const tt = dist / TK.SHOT * p.lead; const fvx = (foe.x - (foe.px || foe.x)) / Math.max(dt, 1e-3), fvy = (foe.y - (foe.py || foe.y)) / Math.max(dt, 1e-3);
+      A.aimA = Math.atan2(foe.y + fvy * tt * .5 - me.y, foe.x + fvx * tt * .5 - me.x) + rnd(-p.err, p.err); A.mode = 'aim'; A.shootOnce = false;
+      if (dist > 70) { A.ix = Math.cos(A.aimA); A.iy = Math.sin(A.aimA); A.mode = 'chase'; }
+      foe.px = foe.x; foe.py = foe.y; return;
+    }
+    foe.px = foe.x; foe.py = foe.y;
+    if (p.bank) { let best = null, bk = 1e9; for (let k = 0; k < 40; k++) { const a = k / 40 * TAU; const r = this.simShot(me.x, me.y, a, me, foe); if (r >= 0 && r < bk) { bk = r; best = a; } } if (best != null) { A.aimA = best + rnd(-p.err, p.err) * .5; A.mode = 'aim'; A.shootOnce = true; return; } }
+    // navigate (BFS over the grid, crates count as passable but must be shot)
+    const start = Math.floor(me.y / TK.C) * TK.GX + Math.floor(me.x / TK.C), goal = Math.floor(foe.y / TK.C) * TK.GX + Math.floor(foe.x / TK.C);
+    const prev = new Map([[start, -1]]), q = [start]; while (q.length) { const c = q.shift(); if (c === goal) break; const cx = c % TK.GX, cy = (c / TK.GX) | 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= TK.GX || ny >= TK.GY) continue; const k = ny * TK.GX + nx; if (prev.has(k) || (this.hp[k] > 0 && this.map[k] === 2)) continue; prev.set(k, c); q.push(k); } }
+    let c = goal, path = []; if (prev.has(goal)) { while (c !== -1 && c !== start) { path.push(c); c = prev.get(c); } path.reverse(); }
+    const nxt = path[0]; if (nxt == null) { A.ix = rnd(-1, 1); A.iy = rnd(-1, 1); A.aimA = null; return; }
+    const tx = (nxt % TK.GX) * TK.C + TK.C / 2, ty = ((nxt / TK.GX) | 0) * TK.C + TK.C / 2;
+    if (this.hp[nxt] > 0 && this.map[nxt] === 1) { A.aimA = Math.atan2(ty - me.y, tx - me.x); A.mode = 'aim'; A.shootOnce = true; A.ix = A.iy = 0; return; }
+    const a = Math.atan2(ty - me.y, tx - me.x); A.ix = Math.cos(a); A.iy = Math.sin(a); A.mode = 'move'; A.aimA = null;
+  }
+  hud() { return { score: this.rounds, turn: -1, colors: TKCOL, status: this.pause > 0 && !this.s.over ? (this.roundOver ? 'Next round…' : 'Round ' + (this.rounds[0] + this.rounds[1] + 1) + ': get ready') : 'First to ' + this.need + ' rounds' }; }
+  hint() { const L = BR.inputLabel(); if (this.s.mode === 'local' && Input.connected().length < 2) return L === 'touch' ? 'Drag on your side to drive · tap to fire' : 'P1: WASD + Space · P2: arrows + Enter'; return L === 'pad' ? 'Left stick: drive · Ⓐ / RT: fire' : L === 'key' ? 'WASD/arrows: drive · Space/Enter: fire' : 'Drag to drive · tap to fire'; }
+  draw(c, W, H) {
+    if (!this.sc || this.W !== W || this.H !== H) this.resize(W, H); const s = this.sc, t = this.t;
+    c.fillStyle = '#20301a'; c.fillRect(0, 0, W, H);
+    const [x0, y0] = this.ts(0, 0), [x1, y1] = this.ts(TK.L, TK.W); const L = Math.min(x0, x1), T = Math.min(y0, y1), Wd = Math.abs(x1 - x0), Hd = Math.abs(y1 - y0);
+    c.fillStyle = '#5b4a2c'; rrect(c, L - 8, T - 8, Wd + 16, Hd + 16, 10); c.fill();
+    c.fillStyle = '#d9c08a'; c.fillRect(L, T, Wd, Hd);
+    c.fillStyle = 'rgba(120,90,40,.12)'; for (let k = 0; k < 60; k++) { const [px, py] = this.ts((k * 37) % TK.L, (k * 53) % TK.W); c.beginPath(); c.arc(px, py, s * (1 + (k % 3)), 0, TAU); c.fill(); }
+    if (this.s.mode === 'local') { const [a, b] = this.ts(TK.L / 2, 0), [cc, d] = this.ts(TK.L / 2, TK.W); c.strokeStyle = 'rgba(0,0,0,.08)'; c.setLineDash([6, 8]); c.lineWidth = 2; c.beginPath(); c.moveTo(a, b); c.lineTo(cc, d); c.stroke(); c.setLineDash([]); }
+    c.fillStyle = 'rgba(70,50,20,.2)'; for (const [mx, my, ma] of this.marks) { const [px, py] = this.ts(mx, my); for (const sd of [-1, 1]) { const ox = Math.cos(ma + Math.PI / 2) * sd * TK.R * .7, oy = Math.sin(ma + Math.PI / 2) * sd * TK.R * .7; const [qx, qy] = this.ts(mx + ox, my + oy); c.fillRect(qx - s * .6, qy - s * .6, s * 1.2, s * 1.2); } }
+    for (let k = 0; k < this.map.length; k++) { const v = this.map[k]; if (!v || this.hp[k] <= 0) continue; const gx = (k % TK.GX) * TK.C, gy = ((k / TK.GX) | 0) * TK.C; const [a, b] = this.ts(gx, gy), [cc, d] = this.ts(gx + TK.C, gy + TK.C); const bx = Math.min(a, cc), by = Math.min(b, d), bw = Math.abs(cc - a), bh = Math.abs(d - b);
+      if (v === 2) { c.fillStyle = '#6d7880'; c.fillRect(bx, by, bw, bh); c.fillStyle = '#8a949b'; c.fillRect(bx + 2, by + 2, bw - 4, bh - 4); c.fillStyle = '#5a646b'; for (const [u, w] of [[.2, .2], [.8, .2], [.2, .8], [.8, .8]]) { c.beginPath(); c.arc(bx + bw * u, by + bh * w, s * .6, 0, TAU); c.fill(); } }
+      else { const hp = this.hp[k]; c.fillStyle = '#8b5a2b'; c.fillRect(bx + 1, by + 1, bw - 2, bh - 2); c.fillStyle = '#b07a43'; c.fillRect(bx + 3, by + 3, bw - 6, bh - 6); c.strokeStyle = '#7a4a24'; c.lineWidth = 2; c.beginPath(); c.moveTo(bx + 3, by + 3); c.lineTo(bx + bw - 3, by + bh - 3); c.moveTo(bx + bw - 3, by + 3); c.lineTo(bx + 3, by + bh - 3); c.stroke(); if (hp < 3) { c.strokeStyle = 'rgba(40,20,5,.7)'; c.beginPath(); c.moveTo(bx + bw * .3, by); c.lineTo(bx + bw * .5, by + bh * .4); c.lineTo(bx + bw * .4, by + bh * .7); if (hp < 2) { c.moveTo(bx + bw, by + bh * .3); c.lineTo(bx + bw * .6, by + bh * .55); c.lineTo(bx + bw * .7, by + bh); } c.stroke(); } } }
+    for (let i = 0; i < 2; i++) { const T = this.tk[i]; if (!T.alive) { const [px, py] = this.ts(T.x, T.y); c.fillStyle = 'rgba(30,20,10,.5)'; c.beginPath(); c.arc(px, py, TK.R * s * 1.3, 0, TAU); c.fill(); continue; } this.drawTank(c, T, i, s); }
+    for (const S0 of this.shots) { const [px, py] = this.ts(S0.x, S0.y); const [qx, qy] = this.ts(S0.x - S0.vx * .03, S0.y - S0.vy * .03); c.strokeStyle = 'rgba(255,209,102,.5)'; c.lineWidth = s * 1.2; c.beginPath(); c.moveTo(qx, qy); c.lineTo(px, py); c.stroke(); c.fillStyle = S0.o ? '#bff3ff' : '#ffe0d6'; c.beginPath(); c.arc(px, py, s * 1.1, 0, TAU); c.fill(); c.strokeStyle = TKCOL[S0.o]; c.lineWidth = 1.5; c.stroke(); }
+    for (const f of this.fx) { const k = f.t; c.globalAlpha = Math.max(0, 1 - k / f.d); c.fillStyle = f.col; c.beginPath(); c.arc(f.x + f.vx * k, f.y + f.vy * k, 3, 0, TAU); c.fill(); } c.globalAlpha = 1;
+    // touch joystick rings
+    for (const k in this.ptrs) { const P = this.ptrs[k]; if (P.moved < 10) continue; c.strokeStyle = 'rgba(255,255,255,.35)'; c.lineWidth = 3; c.beginPath(); c.arc(P.x0, P.y0, 45, 0, TAU); c.stroke(); c.fillStyle = TKCOL[P.seat]; c.globalAlpha = .6; const dx = clamp(P.x - P.x0, -45, 45), dy = clamp(P.y - P.y0, -45, 45); c.beginPath(); c.arc(P.x0 + dx, P.y0 + dy, 16, 0, TAU); c.fill(); c.globalAlpha = 1; }
+    if (this.flash > 0) { c.save(); c.globalAlpha = Math.min(1, this.flash); c.fillStyle = '#ffd166'; c.strokeStyle = '#12355b'; c.lineWidth = 8; c.font = '900 ' + Math.min(W * .09, H * .11) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.strokeText(this.flashTxt, W / 2, H / 2); c.fillText(this.flashTxt, W / 2, H / 2); c.restore(); }
+    if (this.pause > 0 && !this.roundOver && !this.s.over && !this.s.fast) { c.fillStyle = '#fff'; c.strokeStyle = '#12355b'; c.lineWidth = 6; c.font = '900 40px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; const txt = this.pause > .5 ? 'READY' : 'GO!'; c.strokeText(txt, W / 2, H / 2); c.fillText(txt, W / 2, H / 2); }
+  }
+  drawTank(c, T, i, s) {
+    const [px, py] = this.ts(T.x, T.y); const a = this.port ? T.a + Math.PI * 1.5 : T.a; const ra = this.port ? -T.a - Math.PI / 2 : T.a; const ang = this.port ? Math.atan2(-Math.cos(T.a), Math.sin(T.a)) : T.a;
+    c.save(); c.translate(px, py); c.rotate(ang); const r = TK.R * s;
+    c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(-r + 2, -r + 3, r * 2, r * 2);
+    c.fillStyle = '#333'; c.fillRect(-r * 1.05, -r * 1.05, r * 2.1, r * .5); c.fillRect(-r * 1.05, r * .55, r * 2.1, r * .5);
+    c.fillStyle = T.hit > 0 && Math.sin(this.t * 40) > 0 ? '#fff' : TKCOL[i]; rrect(c, -r * .85, -r * .62, r * 1.7, r * 1.24, r * .25); c.fill();
+    c.fillStyle = BR.shade(TKCOL[i], -40); c.beginPath(); c.arc(0, 0, r * .48, 0, TAU); c.fill(); c.fillRect(0, -r * .14, r * 1.35, r * .28);
+    c.restore();
+    for (let k = 0; k < TK.HP; k++) { c.fillStyle = k < T.hp ? '#3fae5a' : 'rgba(0,0,0,.3)'; c.fillRect(px - r + k * (r * 2 / TK.HP) + 1, py - r * 1.7, r * 2 / TK.HP - 2, 4); }
+  }
+  testInfo() { const sc = this.tk.map(T => this.ts(T.x, T.y)); return { over: this.s.over, rounds: this.rounds.slice(), tanks: this.tk.map(T => [T.x, T.y, T.a, T.hp, T.alive]), scr: sc, human: false, pause: this.pause, port: this.port }; }
+  destroy() { }
+}
+BR.registerGame({
+  id: 'tank-duel', name: 'Tank Duel', tag: 'Bank shells off walls to blast your rival.', color: '#5b7a3a', wave: 2, realtime: true,
+  options: [{ id: 'rounds', label: 'Win', choices: [[2, 'Best of 3'], [3, 'Best of 5'], [5, 'Best of 9']], def: 1 }],
+  localNote: 'Same iPad? Each player drags on their own side to drive and taps to fire. Or two controllers, or WASD+Space vs. arrows+Enter.',
+  howTo: ['Drive around the arena and blast your rival. Three hits destroys a tank and wins the round.', 'Shells bounce once off the arena walls and steel blocks, so bank shots work. Careful: after a bounce your own shell can hit you!', 'Wooden crates are cover, but three shells smash them to splinters.', 'Two shells that meet cancel out. Win the most rounds to take the match.'],
+  controls: { pad: 'Left stick drives (tilt lightly to turn in place), A or RT fires. Two controllers = one each.', key: 'Player 1: WASD + Space. Player 2: arrows + Enter.', touch: 'Drag on your side like a joystick to drive. Tap to fire.' },
+  icon(c, x, y, s) { c.fillStyle = '#d9c08a'; rrect(c, x - s * .8, y - s * .6, s * 1.6, s * 1.2, 8); c.fill(); c.fillStyle = '#b07a43'; c.fillRect(x - s * .15, y - s * .55, s * .3, s * .3); c.fillStyle = '#333'; c.fillRect(x - s * .65, y - s * .05, s * .6, s * .12); c.fillRect(x - s * .65, y + s * .33, s * .6, s * .12); c.fillStyle = '#ff6f59'; c.fillRect(x - s * .6, y + s * .02, s * .5, s * .36); c.fillStyle = '#b3261e'; c.beginPath(); c.arc(x - s * .35, y + s * .2, s * .13, 0, TAU); c.fill(); c.fillRect(x - s * .35, y + s * .16, s * .55, s * .08); c.fillStyle = '#ffd166'; c.beginPath(); c.arc(x + s * .45, y + s * .2, s * .08, 0, TAU); c.fill(); },
+  create: s => new TankDuel(s)
+});
+/* ================= Ring Toss duel (alternating throws, wind) ================= */
+const RT_ROWS = [[.22, 10, 5], [.42, 20, 4], [.62, 30, 5], [.82, 50, 4]];
+function rtBottles() { const b = []; RT_ROWS.forEach(([v, pts, n], r) => { for (let i = 0; i < n; i++) b.push({ u: n === 1 ? 0 : -.72 + 1.44 * i / (n - 1), v, pts, r }); }); return b; }
+const RT_RU = .075, RT_RV = .05;
+class RingToss {
+  constructor(s) {
+    this.s = s; this.k = BR.turnKit(s); this.t = 0; this.rings = +(s.opts.rings || 8); this.left = [this.rings, this.rings]; this.score = [0, 0]; this.turn = 0; this.bottles = rtBottles();
+    this.aim = 0; this.power = 0; this.charging = false; this.chargeT = 0; this.ring = null; this.pops = []; this.fx = []; this.swipe = null; this.stack = [[], []]; this.newWind(); this.gold();
+  }
+  newWind() { this.wind = Math.round(rnd(-1, 1) * 10) / 10; }
+  gold() { this.bottles.forEach(b => b.gold = false); const far = this.bottles.filter(b => b.r >= 2); pick(far).gold = true; }
+  resize(W, H) { this.W = W; this.H = H; const top = BR.HUD_H; const h = H - top; this.nearY = H - h * .2; this.farY = top + h * .2; this.cx = W / 2; this.nearW = Math.min(W * .92, h * 1.05, 760); this.farW = this.nearW * .55; }
+  pos(u, v) { const y = lerp(this.nearY, this.farY, v), w = lerp(this.nearW, this.farW, v); return [this.cx + u * w / 2, y, w / this.nearW]; }
+  humanTurn() { return !this.s.over && !this.ring && !this.wait && this.s.players[this.turn].human; }
+  update(dt) {
+    this.t += dt; for (const p of this.pops) p.t += dt; this.pops = this.pops.filter(p => p.t < 1.4); for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < f.d);
+    if (this.s.over) return;
+    if (this.ring) { this.ring.t += dt * (this.s.fast ? 6 : 1) / .85; if (this.ring.t >= 1) this.land(); return; }
+    if (this.wait) return;
+    const pl = this.s.players[this.turn];
+    if (pl.human) {
+      const ctrl = this.s.ctrl(this.turn), a = Input.analog(ctrl);
+      if (a.x && !this.charging) this.aim = clamp(this.aim + a.x * dt * 1.2, -1, 1);
+      const held = a.a || (ctrl.pads || []).some(p => p.conn && p.b[0]);
+      if (held && !this.charging && !this.swipe) { this.charging = true; this.chargeT = 0; }
+      if (this.charging) { this.chargeT += dt; this.power = .5 - .5 * Math.cos(this.chargeT * Math.PI / .9); this.sway = Math.sin(this.chargeT * 3.1) * .035; if (!held) { this.charging = false; this.toss(this.aim + this.sway, this.power, false); } }
+    } else if (!this.k.thinking) this.k.ai(() => this.aiShot(pl.diff), sh => this.toss(sh[0], sh[1], true), 750);
+  }
+  aiShot(diff) {
+    const P = { easy: { su: .13, sv: .1, comp: 0, greed: .2 }, medium: { su: .065, sv: .05, comp: .6, greed: .55 }, hard: { su: .032, sv: .026, comp: 1, greed: .9 } }[diff];
+    const tgts = this.bottles.slice().sort((a, b) => (b.gold ? 100 : b.pts) - (a.gold ? 100 : a.pts)); const tg = Math.random() < P.greed ? tgts[0] : pick(tgts);
+    const g = () => (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+    const u = tg.u - this.wind * .18 * tg.v * P.comp; return [u + g() * P.su, tg.v + g() * P.sv];
+  }
+  toss(aim, power, ai) {
+    if (this.ring || this.s.over) return; aim = clamp(aim, -1.2, 1.2); power = clamp(power, 0, 1.15);
+    const lu = aim + this.wind * .18 * power, lv = power; this.left[this.turn]--;
+    this.ring = { t: 0, aim, power, lu, lv, seat: this.turn, spin: rnd(4, 8) }; Snd.play('whoosh'); this.s.rumble(this.turn, 60, .2, .3);
+  }
+  land() {
+    const R = this.ring; this.ring = null; let best = null, bd = 9;
+    for (const b of this.bottles) { const d = Math.hypot((R.lu - b.u) / RT_RU, (R.lv - b.v) / RT_RV); if (d < bd) { bd = d; best = b; } }
+    let sc = 0, txt = 'Miss', col = '#fff', ringer = false;
+    if (best && bd < 1) { sc = best.gold ? 100 : best.pts; txt = (best.gold ? 'GOLD! ' : 'Ringer! ') + '+' + sc; col = best.gold ? '#ffd166' : '#3cc9a4'; ringer = true; }
+    else if (best && bd < 1.7) { txt = 'Clink!'; col = '#bbb'; Snd.play('clack'); }
+    else if (R.lv < .08) txt = 'Short!'; else if (R.lv > .95 || Math.abs(R.lu) > 1.05) txt = 'Long gone!';
+    this.score[R.seat] += sc; const [x, y] = ringer ? this.pos(best.u, best.v) : this.pos(clamp(R.lu, -1.1, 1.1), clamp(R.lv, 0, 1));
+    this.stack[R.seat].push(ringer ? { u: best.u, v: best.v } : { u: clamp(R.lu, -1.15, 1.15), v: clamp(R.lv, -.05, 1.02), miss: true });
+    this.pops.push({ x, y: y - 40, txt, t: 0, col });
+    if (ringer) { Snd.play('ding'); if (sc >= 50) { Snd.play('coin'); for (let i = 0; i < (sc >= 100 ? 36 : 16); i++) { const a = Math.random() * TAU, v = rnd(40, 200); this.fx.push({ x, y: y - 30, vx: Math.cos(a) * v, vy: Math.sin(a) * v, col: pick(['#ffd166', '#ff6f59', '#7bdff2']), t: 0, d: rnd(.5, 1) }); } } this.s.rumble(R.seat, sc >= 50 ? 260 : 120, sc >= 50 ? .8 : .4, .5); if (sc >= 50) this.s.quip(this.s.players[R.seat].human ? 'bad' : 'good', null, .8); if (best.gold) this.gold(); }
+    else if (txt !== 'Clink!') Snd.play('error');
+    this.wait = true; this.k.timers.push(setTimeout(() => { if (this.s.dead) return; this.wait = false; this.next(); }, this.s.fast ? 0 : 700));
+  }
+  next() {
+    if (this.left[0] <= 0 && this.left[1] <= 0) { const [a, b] = this.score, hs = this.s.humanSeat; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Final ' + a + ' – ' + b, bonus: this.s.mode === 'ai' ? Math.floor(this.score[hs] / 80) : 0, best: this.s.mode === 'ai' ? this.score[hs] : Math.max(a, b) }); return; }
+    this.turn ^= 1; if (this.left[this.turn] <= 0) this.turn ^= 1; this.power = 0; this.newWind();
+  }
+  pointer(type, p) {
+    if (!this.humanTurn() && !(type !== 'down' && this.swipe)) return;
+    if (type === 'down') { if (p.y < this.nearY - (this.nearY - this.farY) * .35) return; this.swipe = { x0: p.x, y0: p.y, pts: [[p.x, p.y, p.ts || now()]] }; }
+    else if (type === 'move' && this.swipe) { this.swipe.pts.push([p.x, p.y, p.ts || now()]); if (this.swipe.pts.length > 40) this.swipe.pts.shift(); this.aim = clamp((p.x - this.cx) / (this.nearW / 2), -1, 1); }
+    else if (type === 'up' && this.swipe) {
+      const sw = this.swipe; this.swipe = null; sw.pts.push([p.x, p.y, p.ts || now()]);
+      let li = sw.pts.length - 1; while (li > 0 && Math.hypot(sw.pts[li][0] - sw.pts[li - 1][0], sw.pts[li][1] - sw.pts[li - 1][1]) < 2) li--;
+      const last = sw.pts[li]; let first = sw.pts[0]; for (let q = 0; q <= li; q++) if (last[2] - sw.pts[q][2] <= 120) { first = sw.pts[q]; break; } if (first === last && li > 0) first = sw.pts[li - 1];
+      const dy = first[1] - last[1], dx = last[0] - first[0], dtm = Math.max(12, last[2] - first[2]); if (dy < 20) return;
+      const power = clamp((dy / dtm) / (this.H * .0021), 0, 1.15); const aim = clamp((sw.x0 - this.cx) / (this.nearW / 2) * .4 + (dx / dy) * 1.6, -1.2, 1.2);
+      this.aim = aim; this.toss(aim, power, false);
+    }
+  }
+  hud() { const pl = this.s.players[this.turn]; return { score: this.score, turn: this.s.over ? -1 : this.turn, status: this.s.over ? 'Game over' : (pl.human ? (this.s.mode === 'ai' ? 'Your toss' : pl.name + ' tosses') : pl.name + ' tosses') + ' · ' + this.left[this.turn] + ' rings left' }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'Stick: aim · hold Ⓐ, release at the right height · mind the wind' : L === 'key' ? '←/→ aim · hold Space/Enter, release · mind the wind' : 'Swipe up from the bottom: angle aims, speed sets the distance'; }
+  draw(c, W, H) {
+    if (!this.cx || this.W !== W || this.H !== H) this.resize(W, H); const t = this.t;
+    const bg = c.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#ff9a5a'); bg.addColorStop(.35, '#ffcf7a'); bg.addColorStop(.36, '#3b2a6b'); bg.addColorStop(1, '#1d1238'); c.fillStyle = bg; c.fillRect(0, 0, W, H);
+    // booth awning
+    for (let i = 0; i < 12; i++) { c.fillStyle = i % 2 ? '#fff' : '#ff6f59'; c.beginPath(); const w = W / 12; c.moveTo(i * w, BR.HUD_H - 8); c.lineTo((i + 1) * w, BR.HUD_H - 8); c.lineTo((i + 1) * w, BR.HUD_H + 14); c.arc(i * w + w / 2, BR.HUD_H + 14, w / 2, 0, Math.PI); c.fill(); }
+    // table
+    const [a0, a1] = this.pos(-1.1, -.05), [b0] = this.pos(1.1, -.05), [c0, c1] = this.pos(1.1, 1.02), [d0] = this.pos(-1.1, 1.02);
+    const tg = c.createLinearGradient(0, a1, 0, c1); tg.addColorStop(0, '#3fae5a'); tg.addColorStop(1, '#1f6b37'); c.fillStyle = tg; c.beginPath(); c.moveTo(a0, a1); c.lineTo(b0, a1); c.lineTo(c0, c1); c.lineTo(d0, c1); c.fill();
+    c.strokeStyle = '#ffd166'; c.lineWidth = 4; c.stroke();
+    // bottles back to front
+    const legend = [];
+    for (const b of this.bottles.slice().sort((x, y) => y.v - x.v)) { const [x, y, k] = this.pos(b.u, b.v); this.bottle(c, x, y, k, b); }
+    // rings resting
+    for (let s = 0; s < 2; s++) for (const r of this.stack[s]) { const [x, y, k] = this.pos(r.u, r.v); c.strokeStyle = s ? '#7bdff2' : '#ff8f7a'; c.lineWidth = 5 * k; c.beginPath(); c.ellipse(x, y - (r.miss ? 0 : 14 * k), 20 * k, 7 * k, 0, 0, TAU); c.stroke(); }
+    // wind flag
+    const wx = W - 70, wy = BR.HUD_H + 50; c.strokeStyle = '#fff'; c.lineWidth = 3; c.beginPath(); c.moveTo(wx, wy + 30); c.lineTo(wx, wy - 20); c.stroke(); const wl = 12 + Math.abs(this.wind) * 40, flap = Math.sin(t * 8) * 4 * Math.min(1, Math.abs(this.wind) + .2); c.fillStyle = '#ffd166'; c.beginPath(); c.moveTo(wx, wy - 20); c.lineTo(wx + Math.sign(this.wind || 1) * wl, wy - 14 + flap); c.lineTo(wx, wy - 6); c.fill(); c.fillStyle = '#fff'; c.font = '800 13px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.fillText('WIND ' + (this.wind === 0 ? 'calm' : (this.wind > 0 ? '→ ' : '← ') + Math.abs(this.wind).toFixed(1)), wx, wy + 48);
+    // aim + meter
+    if (this.humanTurn() && !this.swipe) {
+      const au = this.aim + (this.charging ? this.sway || 0 : 0); const [sx, sy] = this.pos(au * .2, -.12); const pv = this.charging ? this.power : .6; const [ex, ey] = this.pos(au + this.wind * .18 * pv, pv);
+      c.setLineDash([8, 10]); c.strokeStyle = 'rgba(255,255,255,.75)'; c.lineWidth = 3; c.beginPath(); c.moveTo(sx, sy); c.quadraticCurveTo((sx + ex) / 2, Math.min(sy, ey) - 80, ex, ey); c.stroke(); c.setLineDash([]);
+      if (this.charging) { c.strokeStyle = '#ffd166'; c.lineWidth = 3; c.beginPath(); c.ellipse(ex, ey, 16, 6, 0, 0, TAU); c.stroke(); }
+      const mx = Math.min(W - 30, this.cx + this.nearW / 2 + 26), my0 = this.nearY, mh = Math.min(240, (this.nearY - this.farY) * .9); c.fillStyle = 'rgba(0,0,0,.5)'; rrect(c, mx - 12, my0 - mh, 24, mh, 10); c.fill();
+      const pv2 = Math.min(1, this.power); c.fillStyle = pv2 > .75 ? '#ff6f59' : pv2 > .45 ? '#ffd166' : '#3cc9a4'; rrect(c, mx - 9, my0 - mh * pv2, 18, mh * pv2, 8); c.fill();
+      c.strokeStyle = 'rgba(255,255,255,.6)'; c.lineWidth = 2; for (const [v] of RT_ROWS) { const yy = my0 - mh * v; c.beginPath(); c.moveTo(mx - 16, yy); c.lineTo(mx + 16, yy); c.stroke(); }
+    }
+    if (this.swipe && this.swipe.pts.length > 1) { c.strokeStyle = 'rgba(255,255,255,.5)'; c.lineWidth = 6; c.lineCap = 'round'; c.beginPath(); this.swipe.pts.forEach((q, i) => i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1])); c.stroke(); }
+    const R = this.ring; if (R) { const k = Math.min(1, R.t); const [sx, sy] = this.pos(R.aim * .2, -.12); const [ex, ey, kk] = this.pos(R.lu, R.lv); const x = lerp(sx, ex, k), y = lerp(sy, ey, k) - Math.sin(k * Math.PI) * (120 + R.power * 120), sz = lerp(1.25, kk, k); c.save(); c.translate(x, y); c.rotate(Math.sin(k * R.spin) * .3); c.strokeStyle = R.seat ? '#14a3b8' : '#ff6f59'; c.lineWidth = 6 * sz; c.beginPath(); c.ellipse(0, 0, 22 * sz, (9 + 5 * Math.abs(Math.sin(k * R.spin))) * sz, 0, 0, TAU); c.stroke(); c.restore(); }
+    for (let s = 0; s < 2; s++) for (let i = 0; i < this.left[s]; i++) { const x = s === 0 ? 26 + i * 20 : W - 26 - i * 20; c.strokeStyle = s ? '#14a3b8' : '#ff6f59'; c.lineWidth = 4; c.beginPath(); c.ellipse(x, H - 22, 8, 4, 0, 0, TAU); c.stroke(); }
+    for (const p of this.pops) { c.globalAlpha = Math.max(0, 1 - p.t / 1.4); c.fillStyle = p.col; c.strokeStyle = '#12355b'; c.lineWidth = 5; c.font = '900 30px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.strokeText(p.txt, p.x, p.y - p.t * 40); c.fillText(p.txt, p.x, p.y - p.t * 40); } c.globalAlpha = 1;
+    for (const f of this.fx) { const k = f.t; c.globalAlpha = Math.max(0, 1 - k / f.d); c.fillStyle = f.col; c.beginPath(); c.arc(f.x + f.vx * k, f.y + f.vy * k + 80 * k * k, 3.5, 0, TAU); c.fill(); } c.globalAlpha = 1;
+  }
+  bottle(c, x, y, k, b) {
+    const h = 46 * k, w = 13 * k; const col = b.gold ? '#ffd166' : ['#3cc9a4', '#7bdff2', '#b388ff', '#ff8fab'][b.r];
+    c.fillStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.ellipse(x, y, w * 1.2, w * .45, 0, 0, TAU); c.fill();
+    c.fillStyle = col; c.globalAlpha = .9; rrect(c, x - w, y - h * .62, w * 2, h * .62, w * .5); c.fill(); c.beginPath(); c.moveTo(x - w, y - h * .55); c.quadraticCurveTo(x - w * .4, y - h * .75, x - w * .35, y - h); c.lineTo(x + w * .35, y - h); c.quadraticCurveTo(x + w * .4, y - h * .75, x + w, y - h * .55); c.fill(); c.globalAlpha = 1;
+    c.fillStyle = 'rgba(255,255,255,.45)'; c.fillRect(x - w * .6, y - h * .55, w * .25, h * .45);
+    c.fillStyle = '#fff'; c.font = '900 ' + Math.max(9, Math.round(13 * k)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(b.gold ? 100 : b.pts, x, y - h * .3);
+  }
+  destroy() { this.k.clear(); }
+  testInfo() { return { over: this.s.over, turn: this.turn, human: this.humanTurn(), score: this.score.slice(), left: this.left.slice(), lane: [this.cx, this.nearY, this.farY, this.nearW], ring: !!this.ring, wind: this.wind }; }
+}
+BR.registerGame({
+  id: 'ring-toss', name: 'Ring Toss', tag: 'Land rings on bottles for big prizes.', color: '#ff6f59', wave: 2, realtime: false,
+  options: [{ id: 'rings', label: 'Rings each', choices: [[6, '6'], [8, '8'], [10, '10']], def: 1 }],
+  localNote: 'Players take turns tossing. Two controllers: each tosses with their own.',
+  howTo: ['Toss rings onto the bottles. Front row 10, then 20, 30 and 50 at the back. The golden bottle is worth 100 and moves after it is ringed.', 'Players alternate tosses. Highest total when the rings run out wins.', 'Watch the wind flag: it changes every toss and pushes long throws sideways.', 'The power meter rises and falls while you hold. Release at the height of the row you want.'],
+  controls: { pad: 'Stick aims. Hold A, release when the meter hits your row.', key: '←/→ aim, hold Space or Enter and release.', touch: 'Swipe up from the bottom of the screen. The angle aims and the speed sets the distance.' },
+  icon(c, x, y, s) { c.fillStyle = '#3fae5a'; c.beginPath(); c.moveTo(x - s * .8, y + s * .55); c.lineTo(x + s * .8, y + s * .55); c.lineTo(x + s * .5, y - s * .2); c.lineTo(x - s * .5, y - s * .2); c.fill(); [[-.35, '#7bdff2'], [0, '#ffd166'], [.35, '#b388ff']].forEach(([u, col]) => { c.fillStyle = col; rrect(c, x + u * s - s * .08, y - s * .2, s * .16, s * .5, 3); c.fill(); c.fillRect(x + u * s - s * .04, y - s * .4, s * .08, s * .22); }); c.strokeStyle = '#ff6f59'; c.lineWidth = 4; c.beginPath(); c.ellipse(x, y - s * .15, s * .22, s * .08, 0, 0, TAU); c.stroke(); },
+  create: s => new RingToss(s)
+});
+/* ================= Whack-a-Mole race (split screen, same mole schedule for both players) ================= */
+const WMCOL = ['#ff6f59', '#1d9bb5'];
+const WM_K1 = ['KeyQ', 'KeyW', 'KeyE', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyX', 'KeyC'];
+const WM_K2 = [['Numpad7', 'KeyU'], ['Numpad8', 'KeyI'], ['Numpad9', 'KeyO'], ['Numpad4', 'KeyJ'], ['Numpad5', 'KeyK'], ['Numpad6', 'KeyL'], ['Numpad1', 'KeyM'], ['Numpad2', 'Comma'], ['Numpad3', 'Period']];
+class WhackRace {
+  constructor(s) {
+    this.s = s; this.t = 0; this.len = +(s.opts.secs || 45); this.fx = []; this.pops = []; this.flash = 0;
+    this.sched = []; let tt = 1.2; while (tt < this.len - .3) { const f = tt / this.len; const r = Math.random(); this.sched.push({ t: tt, h: ri(9), type: r < .08 ? 'gold' : r < .17 ? 'crab' : 'mole', dur: lerp(1.15, .62, f) * rnd(.85, 1.15) }); tt += lerp(.85, .42, f) * rnd(.6, 1.3); }
+    this.g = [0, 1].map(() => ({ holes: Array(9).fill(null), next: 0, score: 0, stun: 0, sel: 4, mallet: null, hits: 0, misses: 0 }));
+    this.ai = [0, 1].map(i => s.players[i].human ? null : { p: { easy: { re: .72, sd: .16, crab: .4, miss: .22 }, medium: { re: .5, sd: .1, crab: .15, miss: .1 }, hard: { re: .34, sd: .06, crab: .03, miss: .035 } }[s.players[i].diff], plan: [] });
+    this.countdown = this.s.fast ? .05 : 1.5;
+  }
+  resize(W, H) {
+    this.W = W; this.H = H; const top = BR.HUD_H + 6, port = H > W; this.port = port;
+    this.panels = [0, 1].map(i => { const x = port ? 0 : (i ? W / 2 : 0), y = port ? (i ? top + (H - top) / 2 : top) : top, w = port ? W : W / 2, h = port ? (H - top) / 2 : H - top; const cs = Math.min(w * .9 / 3, (h - 50) * .92 / 3); return { x, y, w, h, cs, gx: x + w / 2 - cs * 1.5, gy: y + 44 + (h - 44 - cs * 3) / 2 }; });
+  }
+  holeXY(i, h) { const P = this.panels[i]; return [P.gx + (h % 3 + .5) * P.cs, P.gy + (Math.floor(h / 3) + .55) * P.cs]; }
+  remaining() { return Math.max(0, this.len - this.t); }
+  pointer(type, p) {
+    if (type !== 'down' || !this.panels || this.countdown > 0) return;
+    for (let i = 0; i < 2; i++) { const P = this.panels[i]; if (p.x < P.x || p.x > P.x + P.w || p.y < P.y || p.y > P.y + P.h) continue; if (!this.s.players[i].human) return; let best = -1, bd = P.cs * .55; for (let h = 0; h < 9; h++) { const [x, y] = this.holeXY(i, h); const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = h; } } if (best >= 0) { this.g[i].sel = best; this.whack(i, best); } return; }
+  }
+  update(dt) {
+    for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < f.d); for (const p of this.pops) p.t += dt; this.pops = this.pops.filter(p => p.t < .9);
+    if (this.s.over) return;
+    if (this.countdown > 0) { const c0 = Math.ceil(this.countdown); this.countdown -= dt; if (Math.ceil(this.countdown) !== c0 && this.countdown > 0) Snd.play('click'); if (this.countdown <= 0) Snd.play('select'); return; }
+    this.t += dt;
+    for (let i = 0; i < 2; i++) {
+      const G = this.g[i]; G.stun = Math.max(0, G.stun - dt); if (G.mallet) { G.mallet.t += dt; if (G.mallet.t > .18) G.mallet = null; }
+      while (G.next < this.sched.length && this.sched[G.next].t <= this.t) { const e = this.sched[G.next++]; if (!G.holes[e.h]) { G.holes[e.h] = { type: e.type, t0: this.t, dur: e.dur, hit: 0 }; if (this.ai[i]) this.aiPlan(i, e.h, G.holes[e.h]); } }
+      for (let h = 0; h < 9; h++) { const m = G.holes[h]; if (!m) continue; if (m.hit && this.t - m.hit > .35) G.holes[h] = null; else if (!m.hit && this.t - m.t0 > m.dur) G.holes[h] = null; }
+      if (this.ai[i]) { const A = this.ai[i]; A.plan = A.plan.filter(pl => { if (this.t >= pl.at) { this.g[i].sel = pl.h; this.whack(i, pl.h); return false; } return true; }); }
+      else this.humanIn(i);
+    }
+    if (this.t >= this.len) { const [a, b] = [this.g[0].score, this.g[1].score]; const hs = this.s.humanSeat; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Moles ' + a + ' – ' + b, best: this.s.mode === 'ai' ? this.g[hs].score : Math.max(a, b), bonus: this.s.mode === 'ai' ? Math.floor(Math.max(0, this.g[hs].score) / 12) : 0 }); }
+    else if (Math.floor(this.t) !== Math.floor(this.t - dt) && this.remaining() <= 5) Snd.play('click');
+  }
+  humanIn(i) {
+    const ctrl = this.s.ctrl(i), G = this.g[i];
+    for (const p of ctrl.pads || []) { if (!p || !p.conn) continue; let x = p.ax[0], y = p.ax[1]; if (p.b[14]) x = -1; if (p.b[15]) x = 1; if (p.b[12]) y = -1; if (p.b[13]) y = 1; const dx = x < -.5 ? -1 : x > .5 ? 1 : 0, dy = y < -.5 ? -1 : y > .5 ? 1 : 0; G.sel = (dy + 1) * 3 + (dx + 1); if (Input.hit(p, 0) || Input.hit(p, 1) || Input.hit(p, 2) || Input.hit(p, 3) || Input.hit(p, 7)) this.whack(i, G.sel); }
+    const k = ctrl.keys; if (!k) return;
+    for (let h = 0; h < 9; h++) { const codes = []; if (k === 'k1' || k === 'any') codes.push(WM_K1[h]); if (k === 'k2' || k === 'any') codes.push(...WM_K2[h]); if (codes.some(cd => Input.kfirst.has(cd))) { G.sel = h; this.whack(i, h); } }
+  }
+  aiPlan(i, h, m) {
+    const p = this.ai[i].p; if (m.type === 'crab' && Math.random() > p.crab) return; const g = (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
+    let at = this.t + Math.max(.12, p.re + g * p.sd * 2), hh = h; if (Math.random() < p.miss) hh = (h + 1 + ri(8)) % 9;
+    this.ai[i].plan.push({ at, h: hh });
+  }
+  whack(i, h) {
+    const G = this.g[i]; if (G.stun > 0 || G.mallet || this.s.over || this.countdown > 0) return; G.mallet = { h, t: 0 }; const m = G.holes[h]; const [x, y] = this.holeXY(i, h);
+    if (m && !m.hit && this.t - m.t0 < m.dur) {
+      m.hit = this.t; let pts = 1, col = '#fff'; if (m.type === 'gold') { pts = 3; col = '#ffd166'; } if (m.type === 'crab') { pts = -2; col = '#ff4f3a'; G.stun = .7; }
+      G.score += pts; G.hits++; this.pops.push({ x, y: y - 30, txt: (pts > 0 ? '+' : '') + pts, col, t: 0 });
+      if (pts > 0) { Snd.play(pts > 1 ? 'coin' : 'thunk'); this.s.rumble(i, pts > 1 ? 160 : 70, pts > 1 ? .7 : .35, .4); for (let k = 0; k < (pts > 1 ? 16 : 6); k++) { const a = Math.random() * TAU, v = rnd(40, 160); this.fx.push({ x, y: y - 10, vx: Math.cos(a) * v, vy: Math.sin(a) * v, col: pts > 1 ? '#ffd166' : WMCOL[i], t: 0, d: rnd(.3, .6) }); } }
+      else { Snd.play('error'); this.s.rumble(i, 350, 1, .6); BR.toast(this.s.players[i].name + ' bonked a crab!', 900); this.s.quip(this.s.players[i].human ? 'good' : 'bad', null, .5); }
+    } else { G.misses++; Snd.play('clack'); }
+  }
+  hud() { const r = Math.ceil(this.remaining()); return { score: [this.g[0].score, this.g[1].score], turn: -1, colors: WMCOL, status: this.countdown > 0 ? 'Get ready…' : r + 's left' }; }
+  hint() { const L = BR.inputLabel(); if (L === 'pad') return 'Point the stick at a hole · Ⓐ whack'; if (L === 'key') return this.s.mode === 'local' ? 'P1: Q W E / A S D / Z X C · P2: U I O / J K L / M , .' : 'Keys Q W E / A S D / Z X C whack the holes'; return this.s.mode === 'local' ? 'Each player taps their own board' : 'Tap the moles. Not the crabs!'; }
+  draw(c, W, H) {
+    if (!this.panels || this.W !== W || this.H !== H) this.resize(W, H); const t = this.t;
+    c.fillStyle = '#7ccf6a'; c.fillRect(0, 0, W, H);
+    for (let i = 0; i < 2; i++) {
+      const P = this.panels[i], G = this.g[i], pl = this.s.players[i];
+      c.fillStyle = i ? '#5fb6c9' : '#e88a6e'; c.globalAlpha = .25; c.fillRect(P.x, P.y, P.w, P.h); c.globalAlpha = 1;
+      c.fillStyle = '#4c9a3e'; rrect(c, P.gx - 14, P.gy - 10, P.cs * 3 + 28, P.cs * 3 + 20, 22); c.fill();
+      c.fillStyle = '#fff'; c.font = '900 ' + Math.round(Math.min(26, P.h * .07)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(pl.name + ' · ' + G.score, P.x + P.w / 2, P.y + 22);
+      for (let h = 0; h < 9; h++) {
+        const [x, y] = this.holeXY(i, h), r = P.cs * .36; const m = G.holes[h];
+        c.fillStyle = '#3a2410'; c.beginPath(); c.ellipse(x, y + r * .35, r, r * .42, 0, 0, TAU); c.fill();
+        if (m) { const age = this.t - m.t0, up = m.hit ? Math.max(0, 1 - (this.t - m.hit) / .3) : Math.min(1, age / .12, (m.dur - age) / .12 + .0); const k = clamp(up, 0, 1);
+          c.save(); c.beginPath(); c.rect(x - r * 1.2, y - r * 2.2, r * 2.4, r * 2.55); c.clip(); const by = y + r * .35 - k * r * 1.25;
+          if (m.type === 'crab') { c.fillStyle = '#e8443a'; c.beginPath(); c.ellipse(x, by, r * .75, r * .5, 0, 0, TAU); c.fill(); c.strokeStyle = '#e8443a'; c.lineWidth = r * .15; c.beginPath(); c.arc(x - r * .8, by - r * .5, r * .25, 0, Math.PI * 1.6); c.arc(x + r * .8, by - r * .5, r * .25, Math.PI * 1.4, Math.PI * 3); c.stroke(); c.fillStyle = '#fff'; c.beginPath(); c.arc(x - r * .22, by - r * .45, r * .12, 0, TAU); c.arc(x + r * .22, by - r * .45, r * .12, 0, TAU); c.fill(); }
+          else { c.fillStyle = m.type === 'gold' ? '#ffd166' : '#8b5a2b'; c.beginPath(); c.ellipse(x, by, r * .62, r * .8, 0, Math.PI, TAU); c.fillRect(x - r * .62, by, r * 1.24, r); c.fill(); c.fillStyle = m.type === 'gold' ? '#fff3c4' : '#c9946a'; c.beginPath(); c.ellipse(x, by + r * .05, r * .35, r * .25, 0, 0, TAU); c.fill(); c.fillStyle = '#1d2b3a'; if (m.hit) { c.font = '900 ' + Math.round(r * .4) + 'px sans-serif'; c.fillText('× ×', x, by - r * .32); } else { c.beginPath(); c.arc(x - r * .22, by - r * .3, r * .08, 0, TAU); c.arc(x + r * .22, by - r * .3, r * .08, 0, TAU); c.fill(); } c.fillStyle = '#ff8fab'; c.beginPath(); c.arc(x, by - r * .08, r * .09, 0, TAU); c.fill(); if (m.type === 'gold') { c.fillStyle = '#ffd166'; c.font = '900 ' + Math.round(r * .5) + 'px sans-serif'; c.fillText('★', x, by - r * 1.05); } }
+          c.restore(); }
+        c.fillStyle = '#5b3416'; c.beginPath(); c.ellipse(x, y + r * .35, r, r * .42, 0, 0, Math.PI); c.fill();
+        if (pl.human && G.sel === h && Input.lastKind === 'pad') BR.drawCursor(c, x - r * 1.15, y - r * 1.4, r * 2.3, r * 2.2, t, WMCOL[i]);
+      }
+      if (G.mallet) { const [x, y] = this.holeXY(i, G.mallet.h), r = P.cs * .36, k = G.mallet.t / .18, a = -1.1 + Math.sin(Math.min(1, k) * Math.PI) * 1.1; c.save(); c.translate(x + r * 1.1, y + r * .1); c.rotate(a); c.fillStyle = '#c48a55'; c.fillRect(-r * .1, -r * .1, r * .2, r * 1.3); c.fillStyle = WMCOL[i]; rrect(c, -r * .55, -r * .45, r * 1.1, r * .55, r * .15); c.fill(); c.restore(); }
+      if (G.stun > 0) { c.fillStyle = 'rgba(232,68,58,.18)'; c.fillRect(P.x, P.y, P.w, P.h); }
+    }
+    c.strokeStyle = 'rgba(255,255,255,.6)'; c.lineWidth = 4; c.beginPath(); if (this.port) { c.moveTo(0, this.panels[1].y); c.lineTo(W, this.panels[1].y); } else { c.moveTo(W / 2, BR.HUD_H); c.lineTo(W / 2, H); } c.stroke();
+    for (const f of this.fx) { const k = f.t; c.globalAlpha = Math.max(0, 1 - k / f.d); c.fillStyle = f.col; c.beginPath(); c.arc(f.x + f.vx * k, f.y + f.vy * k + 60 * k * k, 3.5, 0, TAU); c.fill(); } c.globalAlpha = 1;
+    for (const p of this.pops) { c.globalAlpha = Math.max(0, 1 - p.t / .9); c.fillStyle = p.col; c.strokeStyle = '#12355b'; c.lineWidth = 4; c.font = '900 26px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.strokeText(p.txt, p.x, p.y - p.t * 40); c.fillText(p.txt, p.x, p.y - p.t * 40); } c.globalAlpha = 1;
+    if (this.countdown > 0) { c.fillStyle = '#ffd166'; c.strokeStyle = '#12355b'; c.lineWidth = 8; c.font = '900 ' + Math.round(Math.min(W, H) * .16) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; const txt = String(Math.ceil(this.countdown)); c.strokeText(txt, W / 2, H / 2); c.fillText(txt, W / 2, H / 2); }
+    const r = this.remaining(); if (!this.countdown && r <= 10 && !this.s.over) { c.fillStyle = r <= 5 ? '#ff4f3a' : '#fff'; c.font = '900 34px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.fillText(Math.ceil(r), W / 2, this.port ? this.panels[1].y : BR.HUD_H + 30); }
+  }
+  testInfo() { const vis = [0, 1].map(i => this.g[i].holes.map((m, h) => m && !m.hit && m.type !== 'crab' && this.t - m.t0 < m.dur ? this.holeXY(i, h) : null).filter(Boolean)); return { over: this.s.over, score: this.g.map(G => G.score), vis, human: false, cd: this.countdown, t: this.t }; }
+  destroy() { }
+}
+BR.registerGame({
+  id: 'whack-a-mole', name: 'Whack-a-Mole Race', tag: 'Who can bonk the most moles?', color: '#c45a2a', wave: 2, realtime: true,
+  options: [{ id: 'secs', label: 'Round length', choices: [[30, '30 seconds'], [45, '45 seconds'], [60, '60 seconds']], def: 1 }],
+  localNote: 'Same iPad? The screen splits: each player taps their own board. Or two controllers, or two keyboard hands.',
+  howTo: ['Both players get the same moles at the same moment on their own board. Bonk more than your rival before time runs out!', 'Normal mole +1. Golden mole +3.', 'Do NOT bonk the crabs: -2 and your mallet is stunned for a moment.', 'Moles pop up faster and duck sooner as the clock runs down.'],
+  controls: { pad: 'Point the left stick (or D-pad) at a hole, press A to whack. Centered stick = middle hole.', key: 'Player 1: Q W E / A S D / Z X C. Player 2: U I O / J K L / M , . (or the numpad).', touch: 'Tap the moles on your own board.' },
+  icon(c, x, y, s) { c.fillStyle = '#4c9a3e'; rrect(c, x - s * .8, y - s * .6, s * 1.6, s * 1.2, 10); c.fill(); c.fillStyle = '#3a2410'; c.beginPath(); c.ellipse(x, y + s * .3, s * .5, s * .18, 0, 0, TAU); c.fill(); c.fillStyle = '#8b5a2b'; c.beginPath(); c.ellipse(x, y, s * .3, s * .38, 0, Math.PI, TAU); c.fillRect(x - s * .3, y, s * .6, s * .3); c.fill(); c.fillStyle = '#1d2b3a'; c.beginPath(); c.arc(x - s * .1, y - s * .12, s * .05, 0, TAU); c.arc(x + s * .1, y - s * .12, s * .05, 0, TAU); c.fill(); c.save(); c.translate(x + s * .45, y - s * .3); c.rotate(-.6); c.fillStyle = '#c48a55'; c.fillRect(-s * .05, 0, s * .1, s * .5); c.fillStyle = '#ff6f59'; rrect(c, -s * .25, -s * .15, s * .5, s * .25, 4); c.fill(); c.restore(); },
+  create: s => new WhackRace(s)
+});
 /* ================= The boardwalk hub ================= */
 const Hub = BR.hub = {
   px: 120, target: null, sel: -1, SP: 236, X0: 470, k: 1, drag: null, walkT: 0, face: 1, gulls: [], fw: [], fwT: 2, clouds: [],
@@ -2113,6 +3203,7 @@ const Hub = BR.hub = {
     let fs = 21; c.font = '900 ' + fs + 'px ui-rounded,system-ui,sans-serif'; while (c.measureText(g.name).width > 170 && fs > 11) { fs--; c.font = '900 ' + fs + 'px ui-rounded,system-ui,sans-serif'; }
     c.fillText(g.name, x, sy + (g.live ? 23 : 19));
     if (!g.live) { c.font = '800 11px ui-rounded,system-ui,sans-serif'; c.fillStyle = '#ffd166'; c.fillText('COMING SOON', x, sy + 40); }
+    if (g.live && g.wave > 1 && !S().seen[g.id]) { c.save(); c.translate(x + 84, sy + 2); c.rotate(.25); c.fillStyle = '#ff4f3a'; c.beginPath(); for (let k = 0; k < 16; k++) { const a = k / 16 * TAU, rr = k % 2 ? 15 : 22; c.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } c.closePath(); c.fill(); c.fillStyle = '#fff'; c.font = '900 11px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('NEW!', 0, 1); c.restore(); }
     if (sel) { c.fillStyle = '#ffd166'; c.beginPath(); c.moveTo(x - 12, sy - 22 + lift); c.lineTo(x + 12, sy - 22 + lift); c.lineTo(x, sy - 8 + lift); c.fill();
       c.font = '900 14px ui-rounded,system-ui,sans-serif'; c.fillStyle = '#12355b'; const lab = g.live ? (BR.inputLabel() === 'pad' ? 'Ⓐ PLAY' : BR.inputLabel() === 'key' ? 'ENTER TO PLAY' : 'TAP TO PLAY') : 'SNEAK PEEK'; const tw = c.measureText(lab).width + 20; c.fillStyle = '#ffd166'; rrect(c, x - tw / 2, base + 14, tw, 26, 13); c.fill(); c.fillStyle = '#12355b'; c.fillText(lab, x, base + 28); }
   },
@@ -2172,20 +3263,12 @@ function boot() {
 }
 /* ================= Coming-soon booths (later waves plug in here) ================= */
 [
-  ['backgammon', 'Backgammon', '🎲', '#8b5a2b', 'Race your checkers home with dice, doubling and blots.'],
-  ['chinese-checkers', 'Chinese Checkers', '⭐', '#e94b3c', 'Hop across the star in long chain jumps.'],
-  ['dots-boxes', 'Dots and Boxes', '🔲', '#1d9bb5', 'Draw lines, close boxes, steal chains.'],
-  ['mancala', 'Mancala', '🫘', '#a8703f', 'Sow your stones and capture the pits.'],
   ['go-fish', 'Go Fish', '🐟', '#14a89a', 'Got any sevens? The classic card fishing trip.'],
   ['gin-rummy', 'Gin Rummy', '🃏', '#2f5d8a', 'Meld sets and runs, knock, and go gin.'],
   ['crazy-eights', 'Crazy Eights', '8️⃣', '#ff7aa8', 'Match suit or rank. Eights are wild!'],
   ['war', 'War', '⚔️', '#6d7880', 'Flip, compare, and battle for the whole deck.'],
   ['dice', 'Yahtzee-Style Dice', '🎯', '#f2a33a', 'Five dice, three rolls, thirteen boxes to fill.'],
-  ['pong', 'Pong', '🏓', '#3cc9a4', 'The original paddle duel, boardwalk style.'],
-  ['tank-duel', 'Tank Duel', '🛡️', '#5b7a3a', 'Bank shells off walls to blast your rival.'],
   ['snake-battle', 'Snake Battle', '🐍', '#2e7d5b', 'Grow longer and cut off your rival.'],
-  ['ring-toss', 'Ring Toss', '⭕', '#ff6f59', 'Land rings on bottles for big prizes.'],
-  ['whack-a-mole', 'Whack-a-Mole Race', '🔨', '#c45a2a', 'Who can bonk the most moles?'],
   ['mini-golf', 'Mini Golf', '⛳', '#3fae5a', 'Nine silly holes on the boardwalk course.'],
   ['claw', 'Claw Challenge', '🧸', '#b388ff', 'Grab a prize before the timer runs out.'],
   ['go', 'Go', '⚫', '#3a3a3a', 'Surround territory on the ancient board.'],
@@ -2202,7 +3285,7 @@ function boot() {
   ['blackjack', 'Blackjack', '♠️', '#1d2b3a', 'Hit or stand against the boardwalk dealer.'],
   ['poker', 'Poker', '♦️', '#9b2335', 'Bluff the rivals out of their tickets.'],
   ['pinball', 'Pinball Duel', '🕹️', '#ff7aa8', 'Flippers, bumpers, multiball madness.']
-].forEach(g => BR.registerSoon(g[0], g[1], g[2], g[3], g[4], 2 + Math.floor(BR.games.filter(x => !x.live).length / 8)));
+].forEach(g => BR.registerSoon(g[0], g[1], g[2], g[3], g[4], 3 + Math.floor(BR.games.filter(x => !x.live).length / 8)));
 boot();
 </script>
 </body></html>

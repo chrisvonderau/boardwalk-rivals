@@ -4,14 +4,18 @@ A beach-boardwalk game parlor in a single offline HTML file. Walk the boardwalk,
 
 **Play:** https://chrisvonderau.github.io/boardwalk-rivals/ (or download `index.html` and open it; no internet needed)
 
-## Wave 1 booths
-Checkers, Chess, Connect Four, Reversi, Tic-Tac-Toe, Ultimate Tic-Tac-Toe, Air Hockey, Skee-Ball and Battleship. Thirty more booths are coming in later waves.
+## Live booths (25)
+- **Wave 1:** Checkers, Chess, Connect Four, Reversi, Tic-Tac-Toe, Ultimate Tic-Tac-Toe, Air Hockey, Skee-Ball, Battleship.
+- **Wave 2:** Backgammon, Chinese Checkers, Dots and Boxes, Mancala, Pong, Tank Duel, Ring Toss, Whack-a-Mole.
+- **Wave 3:** Go Fish, Gin Rummy, Crazy Eights, War, Beach Dice (Yahtzee-style), Snake Battle, Mini Golf, Claw Challenge.
+
+Fourteen more booths are coming in later waves.
 
 ## Controls
 - **Xbox controller:** left stick / D-pad to move, A select, B back, X/Y game actions, LB/RB hop between booths, Start pause. Plug in two pads for head-to-head.
 - **Keyboard and mouse:** arrows or WASD, Enter/Space, Esc to pause, click to play.
-- **iPad:** tap, drag and swipe; air hockey splits the screen for two players.
+- **iPad and iPhone:** tap, drag and swipe, in portrait or landscape. Card games pass the device between players behind a "Pass to…" cover so hands stay hidden.
 
 Win tickets, trade them for prizes, characters and boardwalk decorations. Progress is saved in your browser.
 
-![Boardwalk Rivals](shot.png)
+![Boardwalk Rivals](shot3.png)

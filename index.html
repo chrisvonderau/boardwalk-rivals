@@ -110,7 +110,7 @@ table.rec td:first-child,table.rec th:first-child{text-align:left}
 'use strict';
 /* ================= Boardwalk Rivals — core ================= */
 const BR = {}; window.BR = BR;
-BR.VERSION = '4.0 · Wave 4';
+BR.VERSION = '5.0 · Wave 5';
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -889,7 +889,7 @@ function openCredits() {
 function showTitle() {
   App.state = 'title'; setHUD(); setHint(''); Snd.setMood('hub');
   const live = BR.games.filter(g => g.live).length, total = BR.games.length;
-  UI.open('<div class="logo">Boardwalk<span>Rivals</span></div><p>' + live + ' booths open now · ' + (total - live) + ' more coming · 6 rivals</p>' +
+  UI.open('<div class="logo">Boardwalk<span>Rivals</span></div><p>' + (live === total ? 'All ' + total + ' booths open' : live + ' booths open now · ' + (total - live) + ' more coming') + ' · 6 rivals</p>' +
     '<div class="row c" style="margin-top:18px;flex-direction:column;align-items:center"><button class="btn go" data-a="play" data-default>Hit the Boardwalk</button><div class="row c"><button class="btn" data-a="set">Settings</button><button class="btn" data-a="credits">Credits</button></div></div>' +
     '<p class="blink" style="margin-top:18px;font-size:14px">Tap · Enter · or press Ⓐ on your controller</p>',
     { cls: 'title', clear: true, noBack: true, acts: { play: () => { Snd.init(); goHub(); }, set: () => openSettings(), credits: () => openCredits() } });
@@ -5285,6 +5285,884 @@ BR.registerGame({
   icon(c, x, y, s) { c.fillStyle = '#f7e2b0'; rrect(c, x - s * .7, y - s * .7, s * 1.4, s * 1.4, 8); c.fill(); [[-.4, -.4, 0], [.4, -.4, 1], [.4, .4, 2], [-.4, .4, 3]].forEach(([a, b2, k]) => { c.fillStyle = PR_COL[k]; c.beginPath(); c.arc(x + a * s, y + b2 * s, s * .2, 0, TAU); c.fill(); }); c.fillStyle = '#ffd166'; c.beginPath(); c.arc(x, y, s * .22, 0, TAU); c.fill(); },
   create: s => new TidePoolRace(s)
 });
+/* ================= Seashell Memory (memory-match duel) ================= */
+const MM_SYM = ['🐚', '🦀', '⭐', '🐠', '🌴', '☀️', '🦩', '🐬', '🐙', '🦞', '🐢', '🍦', '⛱️', '🪁', '🎈', '🌊', '🐳', '⚓'];
+const MM_COL = ['#ff8fab', '#ff6f59', '#f2b33a', '#3cc9a4', '#2f9e44', '#ffd166', '#ff7aa8', '#1d9bb5', '#8a5cd6', '#e8443a', '#5c940d', '#f783ac', '#4dabf7', '#fd7e14', '#e64980', '#228be6', '#364fc7', '#495057'];
+class SeashellMemory extends PickGame {
+  constructor(s) {
+    super(s); const n = +(s.opts.pairs || 12); this.np = n; const ks = []; for (let k = 0; k < n; k++) ks.push(k, k); shuffle(ks);
+    this.st = { cards: ks.map(k => ({ k, up: false, gone: false, owner: -1 })), turn: 0, flip: [], pts: [0, 0], n: 0, streak: 0 };
+    this.mem = [new Map(), new Map()]; this.log = 'Flip two shells. Find a match and go again!';
+  }
+  seat() { return this.st.turn; }
+  focused(tg) { tg = tg || this.legalTargets(); let f = tg.find(t => t.id === this.fk); if (!f && tg.length) { const q = this.fpos; f = q ? tg.reduce((a, t) => Math.hypot(t.x - q[0], t.y - q[1]) < Math.hypot(a.x - q[0], a.y - q[1]) ? t : a, tg[0]) : tg[0]; this.fk = f.id; } if (f) this.fpos = [f.x, f.y]; return f || null; }
+  resize(W, H) {
+    this.W = W; this.H = H; const n = this.st.cards.length, top = BR.HUD_H + 8, ah = H - top - 44, aw = W - 20; let best = null;
+    for (let cols = 2; cols <= n; cols++) { const rows = Math.ceil(n / cols); const cw = Math.min(aw / cols - 6, (ah / rows - 6) / 1.15); if (!best || cw > best.cw) best = { cols, rows, cw }; }
+    this.g = best; const ch = best.cw * 1.15; this.g.ch = ch; this.g.x0 = (W - best.cols * (best.cw + 6) + 6) / 2; this.g.y0 = top + (ah - best.rows * (ch + 6) + 6) / 2;
+  }
+  rect(i) { const g = this.g, c = i % g.cols, r = Math.floor(i / g.cols); return [g.x0 + c * (g.cw + 6), g.y0 + r * (g.ch + 6), g.cw, g.ch, r]; }
+  targets() {
+    if (!this.g || !this.humanTurn() || this.st.flip.length >= 2) return []; const out = [];
+    this.st.cards.forEach((cd, i) => { if (cd.gone || cd.up) return; const [x, y, w, h, r] = this.rect(i); out.push({ id: 'm' + i, x, y, w, h, r, cell: true, mv: { i } }); });
+    return out;
+  }
+  see(i) { const cd = this.st.cards[i]; for (let s2 = 0; s2 < 2; s2++) { const P = this.s.players[s2]; if (P.human) continue; const keep = { easy: .45, medium: .8, hard: 1 }[P.diff] || .8; if (Math.random() < keep) this.mem[s2].set(i, cd.k); } }
+  forget() { for (let s2 = 0; s2 < 2; s2++) { const P = this.s.players[s2]; if (P.human) continue; const f = { easy: .25, medium: .08, hard: 0 }[P.diff] || .08; for (const k of [...this.mem[s2].keys()]) if (Math.random() < f) this.mem[s2].delete(k); } }
+  commit(m) {
+    const st = this.st; if (this.s.over || !m || m.i == null) return; const cd = st.cards[m.i]; if (!cd || cd.up || cd.gone || st.flip.length >= 2) return;
+    cd.up = true; st.flip.push(m.i); this.see(m.i); Snd.play('click'); if (st.flip.length < 2) return;
+    const [a, b] = st.flip, me = st.turn, P = this.s.players[me];
+    if (st.cards[a].k === st.cards[b].k) {
+      st.pts[me]++; st.streak++; Snd.play('coin'); this.s.rumble(me, 80, .3, .3); for (const i of [a, b]) { const [x, y, w, h] = this.rect(i); this.burst(x + w / 2, y + h / 2, MM_COL[st.cards[i].k], 10); }
+      this.say(st.streak > 1 ? 'MATCH × ' + st.streak + '!' : 'MATCH!', '#ffd166', .9); this.log = P.name + ' found a pair · go again';
+      this.anim = { t: 0, d: .6, done: () => { for (const i of [a, b]) { st.cards[i].gone = true; st.cards[i].owner = me; for (const M of this.mem) M.delete(i); } st.flip = []; st.n++; if (st.cards.every(c => c.gone)) this.finish(); } };
+    } else {
+      Snd.play('splash'); this.log = 'No match · ' + this.s.players[1 - me].name + '\u2019s turn';
+      this.anim = { t: 0, d: 1.1, done: () => { for (const i of [a, b]) st.cards[i].up = false; st.flip = []; st.turn = 1 - me; st.streak = 0; st.n++; this.forget(); } };
+    }
+  }
+  finish() { const [a, b] = this.st.pts; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Pairs ' + a + ' – ' + b + ' of ' + this.np, best: this.s.mode === 'ai' ? this.st.pts[this.s.humanSeat] : Math.max(a, b) }); }
+  aiPick(seat, diff) {
+    const st = this.st, M = this.mem[seat], hid = st.cards.map((c, i) => (!c.gone && !c.up) ? i : -1).filter(i => i >= 0); if (!hid.length) return null;
+    if (st.flip.length === 1) { const k = st.cards[st.flip[0]].k; for (const [i, kk] of M) if (kk === k && i !== st.flip[0] && hid.includes(i)) return { i }; const unk = hid.filter(i => !M.has(i)); return { i: pick(unk.length ? unk : hid) }; }
+    const byK = {}; for (const [i, k] of M) if (hid.includes(i)) (byK[k] = byK[k] || []).push(i); for (const k in byK) if (byK[k].length >= 2) return { i: byK[k][0] };
+    const unk = hid.filter(i => !M.has(i)); return { i: pick(unk.length ? unk : hid) };
+  }
+  thinkMs() { return this.st.flip.length ? 650 : 500; }
+  hud() { return { score: this.st.pts, turn: this.s.over ? -1 : this.st.turn, status: this.status(this.st.flip.length ? 'flip one more' : 'flip a shell') }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'D-pad picks a shell · Ⓐ flips it' : L === 'key' ? 'Arrows pick · Enter flips' : 'Tap two shells to flip them'; }
+  drawCard(c, x, y, w, h, cd, foc) {
+    c.save(); c.fillStyle = 'rgba(0,0,0,.25)'; rrect(c, x + 2, y + 4, w, h, w * .14); c.fill();
+    if (cd.up) { c.fillStyle = '#fffaf0'; rrect(c, x, y, w, h, w * .14); c.fill(); c.fillStyle = MM_COL[cd.k]; c.globalAlpha = .28; c.beginPath(); c.arc(x + w / 2, y + h / 2, w * .4, 0, TAU); c.fill(); c.globalAlpha = 1; c.font = Math.round(w * .5) + 'px system-ui,"Apple Color Emoji","Segoe UI Emoji",sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(MM_SYM[cd.k], x + w / 2, y + h / 2 + 2); c.strokeStyle = MM_COL[cd.k]; c.lineWidth = 3; rrect(c, x, y, w, h, w * .14); c.stroke(); }
+    else { const g = c.createLinearGradient(x, y, x + w, y + h); g.addColorStop(0, '#f7d9a0'); g.addColorStop(1, '#e6b86a'); c.fillStyle = g; rrect(c, x, y, w, h, w * .14); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 2; rrect(c, x + 3, y + 3, w - 6, h - 6, w * .1); c.stroke();
+      c.translate(x + w / 2, y + h / 2); c.strokeStyle = 'rgba(160,100,40,.55)'; c.lineWidth = Math.max(1.5, w * .035); const r = w * .26; c.beginPath(); c.moveTo(0, r * .9); for (let k = -3; k <= 3; k++) { c.moveTo(0, r * .9); c.lineTo(Math.sin(k * .38) * r * 1.1, -Math.cos(k * .38) * r); } c.stroke(); c.beginPath(); c.arc(0, r * .2, r * 1.05, Math.PI * 1.15, Math.PI * 1.85); c.stroke(); }
+    if (foc) { c.restore(); c.save(); c.strokeStyle = '#ffd166'; c.lineWidth = 4; rrect(c, x - 3, y - 3, w + 6, h + 6, w * .16); c.stroke(); }
+    c.restore();
+  }
+  draw(c, W, H) {
+    if (!this.g || this.W !== W || this.H !== H) this.resize(W, H); BR.tableBG(c, W, H, '#7bdff2', '#1d9bb5'); const st = this.st, f = this.humanTurn() && BR.showCursor() ? this.focused() : null;
+    st.cards.forEach((cd, i) => { const [x, y, w, h] = this.rect(i); if (cd.gone) { c.strokeStyle = cd.owner >= 0 ? BR.PCOL[cd.owner] : 'rgba(255,255,255,.3)'; c.globalAlpha = .45; c.lineWidth = 2; rrect(c, x + 4, y + 4, w - 8, h - 8, 10); c.stroke(); c.globalAlpha = 1; return; } this.drawCard(c, x, y, w, h, cd, f && f.id === 'm' + i); });
+    CD.label(c, this.log, W / 2, H - 58, 14); this.drawFx(c); this.drawBanner(c, W, H);
+  }
+  testPick() { const tg = this.legalTargets(); const st = this.st; if (st.flip.length === 1 && Math.random() < .5) { const k = st.cards[st.flip[0]].k, t = tg.find(t => st.cards[t.mv.i].k === k); if (t) return t; } return tg.length ? pick(tg) : null; }
+}
+BR.registerGame({
+  id: 'memory', name: 'Seashell Memory', tag: 'Flip two shells, remember everything, match the most.', color: '#f7d9a0', wave: 5,
+  options: [{ id: 'pairs', label: 'Board', choices: [[8, '8 pairs (quick)'], [12, '12 pairs'], [18, '18 pairs (big)']], def: 1 }],
+  howTo: ['All the shells start face down. On your turn flip any two.', 'A match is yours: keep the pair and take another turn. No match? Both flip back and your rival goes.', 'Watch every flip, yours and your rival\u2019s, and remember where things are!', 'When the board is empty, whoever collected more pairs wins.'],
+  controls: { pad: 'D-pad moves between shells, A flips.', key: 'Arrows move, Enter flips.', touch: 'Tap a shell to flip it.' },
+  icon(c, x, y, s) { const w = s * .62, h = s * .72; SeashellMemory.prototype.drawCard(c, x - w - 2, y - h / 2, w, h, { up: false }); SeashellMemory.prototype.drawCard(c, x + 2, y - h / 2, w, h, { up: true, k: 0 }); },
+  create: s => new SeashellMemory(s)
+});
+/* ================= Codebreaker Duel (Mastermind-style) ================= */
+const CB_COL = ['#e8443a', '#fd7e14', '#ffd166', '#2f9e44', '#1d9bb5', '#8a5cd6', '#ff7aa8', '#f8f9fa'], CB_SYM = ['●', '▲', '■', '◆', '★', '♥', '✚', '◯'], CB_NAME = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink', 'white'];
+function cbFeedback(code, g) { let b = 0, w = 0; const cc = {}, gc = {}; for (let i = 0; i < code.length; i++) { if (code[i] === g[i]) b++; else { cc[code[i]] = (cc[code[i]] || 0) + 1; gc[g[i]] = (gc[g[i]] || 0) + 1; } } for (const k in gc) w += Math.min(gc[k], cc[k] || 0); return [b, w]; }
+function cbAll(n, k) { const out = []; const tot = Math.pow(k, n); for (let v = 0; v < tot; v++) { const c = []; let x = v; for (let i = 0; i < n; i++) { c.push(x % k); x = Math.floor(x / k); } out.push(c); } return out; }
+class Codebreaker extends PickGame {
+  constructor(s) {
+    super(s); this.n = +(s.opts.pegs || 4); this.nc = +(s.opts.colors || 6); this.maxR = 10; this.hidden = s.mode === 'local'; this.coverText = 'The secret code stays hidden'; this.coverBtn = "I'm ready";
+    this.st = { phase: 'set', turn: 0, codes: [null, null], rows: [[], []], cur: [], solved: [-1, -1] }; this.cands = [null, null]; this.log = '';
+    if (!s.players[0].human) this.aiSet(0);
+  }
+  seat() { return this.st.turn; }
+  aiSet(seat) { const st = this.st; st.codes[1 - seat] = Array.from({ length: this.n }, () => ri(this.nc)); this.afterSet(seat); }
+  afterSet(seat) { const st = this.st; st.cur = []; if (seat === 0) { st.turn = 1; if (!this.s.players[1].human) this.aiSet(1); } else { st.phase = 'guess'; st.turn = 0; this.hidden = false; this.say('CRACK THE CODE!', '#7bdff2', 1.2); Snd.play('whoosh'); } }
+  resize(W, H) {
+    this.W = W; this.H = H; const top = BR.HUD_H + 6, side = W > H * 1.2; this.side = side;
+    const pc = side && (Math.ceil(this.nc / 2) + 3) * 52 > H - top - 12 ? 3 : 2, pw = side ? pc * 50 + 6 : 0, ph = side ? 0 : 50 * Math.ceil(this.nc / Math.max(1, Math.floor((W - 20) / 52))) + 62;
+    this.area = { x: 8, y: top, w: W - 16 - (side ? pw + 14 : 0), h: H - top - 44 - ph };
+    this.pal = side ? { x: W - pw - 10, y: top + 4, w: pw, cols: pc } : { x: 10, y: this.area.y + this.area.h + 4, w: W - 20, cols: Math.min(this.nc, Math.floor((W - 20) / 52)) };
+  }
+  boardRect(b) { const A = this.area; if (this.st.phase === 'set') return { x: A.x + A.w / 2 - Math.min(A.w, 420) / 2, y: A.y + A.h * .25, w: Math.min(A.w, 420), h: A.h * .5 }; const w = A.w / 2 - 6; return { x: A.x + b * (w + 12), y: A.y, w, h: A.h }; }
+  pegSize(R) { return Math.max(10, Math.min((R.h - 26) / (this.maxR + .4), R.w / (this.n + 2.4), 44)); }
+  palBtns() {
+    const P = this.pal, out = []; const bs = 46, gap = 6, cols = P.cols, rows = Math.ceil(this.nc / cols), x0 = P.x + (P.w - (cols * (bs + gap) - gap)) / 2;
+    for (let i = 0; i < this.nc; i++) out.push({ id: 'c' + i, x: x0 + (i % cols) * (bs + gap), y: P.y + Math.floor(i / cols) * (bs + gap), w: bs, h: bs, r: Math.floor(i / cols), col: i });
+    const yb = P.y + rows * (bs + gap) + 4, set = this.st.phase === 'set'; const names = set ? ['del', 'rnd', 'ok'] : ['del', 'ok'];
+    if (this.side) names.forEach((n, j) => out.push({ id: n, x: P.x, y: yb + j * (bs + gap), w: P.w, h: bs, r: 10 + j }));
+    else { const bw = Math.min(150, (P.w - (names.length - 1) * 8) / names.length), xb = P.x + (P.w - (names.length * (bw + 8) - 8)) / 2; names.forEach((n, j) => out.push({ id: n, x: xb + j * (bw + 8), y: yb, w: bw, h: bs, r: 10 })); }
+    return out;
+  }
+  targets() {
+    if (!this.area || !this.humanTurn()) return []; const st = this.st, full = st.cur.length >= this.n, ok = full, out = [];
+    for (const b of this.palBtns()) {
+      if (b.col != null) out.push(Object.assign(b, { legal: !full, why: 'Row is full: Submit or delete', act: () => { st.cur.push(b.col); Snd.play('click'); if (st.cur.length >= this.n) { const o = this.palBtns().find(q => q.id === 'ok'); if (o) this.fk = 'ok'; } } }));
+      else if (b.id === 'del') out.push(Object.assign(b, { label: '⌫', legal: st.cur.length > 0, act: () => { st.cur.pop(); Snd.play('back'); } }));
+      else if (b.id === 'rnd') out.push(Object.assign(b, { label: 'Random', act: () => { st.cur = Array.from({ length: this.n }, () => ri(this.nc)); Snd.play('select'); this.fk = 'ok'; } }));
+      else if (b.id === 'ok') out.push(Object.assign(b, { label: st.phase === 'set' ? 'Hide it!' : 'Guess', legal: ok, why: 'Fill all ' + this.n + ' pegs first', mv: { code: st.cur.slice() }, def: ok }));
+    }
+    return out;
+  }
+  shortcut(n) { if (n.b && this.st.cur.length) { this.st.cur.pop(); Snd.play('back'); return true; } return false; }
+  commit(m) {
+    const st = this.st, me = st.turn; if (this.s.over || !m || !m.code || m.code.length !== this.n) return;
+    if (st.phase === 'set') { st.codes[1 - me] = m.code.slice(); Snd.play('place'); this.afterSet(me); return; }
+    const fb = cbFeedback(st.codes[me], m.code); st.rows[me].push({ g: m.code.slice(), b: fb[0], w: fb[1] }); st.cur = []; this.fk = null;
+    if (fb[0] === this.n) { st.solved[me] = st.rows[me].length; Snd.play('coin'); this.say('CRACKED IN ' + st.rows[me].length + '!', '#3cc9a4', 1.3); this.s.quip(this.s.players[me].human ? 'bad' : 'good', null, .4); }
+    else Snd.play(fb[0] + fb[1] ? 'ding' : 'clack');
+    this.log = this.s.players[me].name + ': ' + fb[0] + ' exact, ' + fb[1] + ' right colour';
+    if (me === 1) { const [a, b] = st.solved; if (a > 0 || b > 0 || st.rows[1].length >= this.maxR) { this.done(); return; } }
+    else if (st.solved[1] > 0) { this.done(); return; }
+    if (st.solved[1 - me] < 0) st.turn = 1 - me;
+  }
+  bestRow(s2) { let b = [-1, -1]; for (const r of this.st.rows[s2]) if (r.b > b[0] || (r.b === b[0] && r.w > b[1])) b = [r.b, r.w]; return b; }
+  done() {
+    const [a, b] = this.st.solved; let w, det;
+    if (a > 0 && b > 0) { w = a < b ? 0 : b < a ? 1 : -1; det = 'Cracked in ' + a + ' and ' + b + ' guesses'; }
+    else if (a > 0 || b > 0) { w = a > 0 ? 0 : 1; det = 'Only ' + this.s.players[w].name + ' cracked it (' + Math.max(a, b) + ' guesses)'; }
+    else { const x = this.bestRow(0), y = this.bestRow(1); w = x[0] > y[0] ? 0 : y[0] > x[0] ? 1 : x[1] > y[1] ? 0 : y[1] > x[1] ? 1 : -1; det = 'Nobody cracked it · closest: ' + x[0] + '/' + x[1] + ' vs ' + y[0] + '/' + y[1]; }
+    this.revealAll = true; this.s.end(w, { detail: det, best: this.s.mode === 'ai' ? (this.st.solved[this.s.humanSeat] > 0 ? 11 - this.st.solved[this.s.humanSeat] : 0) : 0 });
+  }
+  consistent(seat) { const rows = this.st.rows[seat]; if (!this.cands[seat]) this.cands[seat] = cbAll(this.n, this.nc); this.cands[seat] = this.cands[seat].filter(c => rows.every(r => { const f = cbFeedback(c, r.g); return f[0] === r.b && f[1] === r.w; })); return this.cands[seat]; }
+  aiPick(seat, diff) {
+    const st = this.st; if (st.phase === 'set') return { code: Array.from({ length: this.n }, () => ri(this.nc)) };
+    const rows = st.rows[seat]; if (!rows.length) return { code: Array.from({ length: this.n }, (_, i) => (i < this.n / 2 ? 0 : 1) + (diff === 'hard' ? 0 : ri(this.nc - 1)) % this.nc) };
+    const C = this.consistent(seat); if (!C.length) return { code: Array.from({ length: this.n }, () => ri(this.nc)) };
+    if (diff === 'easy' && Math.random() < .45) { const c = pick(C).slice(); c[ri(this.n)] = ri(this.nc); return { code: c }; }
+    if (diff !== 'hard' || C.length > 400 || C.length <= 2) return { code: pick(C).slice() };
+    const pool = C.length > 120 ? Array.from({ length: 120 }, () => pick(C)) : C; let best = pool[0], bs = 1e9;
+    for (const g of pool) { const cnt = {}; let mx = 0; for (const c of C) { const f = cbFeedback(c, g), key = f[0] * 10 + f[1]; cnt[key] = (cnt[key] || 0) + 1; if (cnt[key] > mx) mx = cnt[key]; } if (mx < bs) { bs = mx; best = g; } }
+    return { code: best.slice() };
+  }
+  thinkMs() { return this.st.phase === 'set' ? 300 : 800; }
+  hud() { const st = this.st; return { score: [st.rows[0].length, st.rows[1].length], turn: this.s.over ? -1 : st.turn, status: this.status(st.phase === 'set' ? 'set a secret code for ' + this.s.players[1 - st.turn].name : 'guess ' + (st.rows[st.turn].length + 1) + ' of ' + this.maxR) }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(), set = this.st.phase === 'set'; return L === 'pad' ? 'D-pad picks a colour · Ⓐ adds it · Ⓑ deletes' : L === 'key' ? 'Arrows + Enter add colours · Backspace deletes' : set ? 'Tap colours to build your secret code, then Hide it!' : 'Tap colours to build a guess, then Guess'; }
+  peg(c, x, y, r, col, dim) { if (col == null) { c.fillStyle = 'rgba(0,0,0,.28)'; c.beginPath(); c.arc(x, y, r * .45, 0, TAU); c.fill(); return; } c.globalAlpha = dim ? .5 : 1; c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.arc(x + 1, y + 2, r, 0, TAU); c.fill(); c.fillStyle = CB_COL[col]; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill(); c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 1.5; c.stroke(); c.fillStyle = col === 7 || col === 2 ? '#555' : 'rgba(255,255,255,.85)'; c.font = '900 ' + Math.round(r * .95) + 'px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(CB_SYM[col], x, y + 1); c.globalAlpha = 1; }
+  drawBoard(c, b) {
+    const st = this.st, R = this.boardRect(b), p = this.pegSize(R), rows = st.rows[b], act = st.turn === b && !this.s.over, P = this.s.players;
+    c.fillStyle = act ? 'rgba(255,255,255,.22)' : 'rgba(0,0,0,.18)'; rrect(c, R.x, R.y, R.w, R.h, 14); c.fill(); if (act) { c.strokeStyle = '#ffd166'; c.lineWidth = 3; rrect(c, R.x, R.y, R.w, R.h, 14); c.stroke(); }
+    CD.label(c, P[b].name.split(' ')[0] + (st.solved[b] > 0 ? ' ✔ ' + st.solved[b] : ' · ' + rows.length + '/' + this.maxR), R.x + R.w / 2, R.y + 12, Math.min(14, R.w / 12), act ? '#ffd166' : '#fff');
+    const x0 = R.x + (R.w - (this.n + 1.6) * p) / 2 + p / 2, rh = (R.h - 26) / this.maxR;
+    for (let r = 0; r < this.maxR; r++) {
+      const y = R.y + 24 + r * rh + rh / 2, row = rows[r], cur = !row && r === rows.length && act ? st.cur : null;
+      for (let i = 0; i < this.n; i++) this.peg(c, x0 + i * p, y, p * .4, row ? row.g[i] : cur ? (cur[i] != null ? cur[i] : null) : null);
+      if (row) { const fx = x0 + this.n * p + p * .1, fs = p * .2; let k = 0; for (let j = 0; j < this.n; j++) { const cx = fx + (k % 2) * fs * 2.3, cy = y - fs * 1.1 + Math.floor(k / 2) * fs * 2.3; k++; c.beginPath(); c.arc(cx, cy, fs * .9, 0, TAU); c.fillStyle = j < row.b ? '#12355b' : j < row.b + row.w ? '#fff' : 'rgba(0,0,0,.2)'; c.fill(); if (j < row.b + row.w) { c.strokeStyle = '#12355b'; c.lineWidth = 1; c.stroke(); } } }
+      else if (cur) { c.strokeStyle = 'rgba(255,209,102,.8)'; c.lineWidth = 2; rrect(c, x0 - p * .55, y - p * .5, this.n * p + p * .1, p, 8); c.stroke(); }
+    }
+    if (this.revealAll || this.s.over) { const code = st.codes[b]; if (code) { CD.label(c, 'code', R.x + 18, R.y + R.h - 10, 11); code.forEach((col, i) => this.peg(c, x0 + i * p, R.y + R.h - 10 - p * .2, p * .3, col)); } }
+  }
+  draw(c, W, H) {
+    if (!this.area || this.W !== W || this.H !== H) this.resize(W, H); BR.tableBG(c, W, H, '#2f5d8a', '#12233a'); const st = this.st, f = this.humanTurn() && BR.showCursor() ? this.focused() : null;
+    if (st.phase === 'set') { const R = this.boardRect(0), p = Math.min(54, R.w / (this.n + 1)); const who = this.s.players[st.turn], tgt = this.s.players[1 - st.turn];
+      CD.label(c, this.humanTurn() ? who.name + ': make a secret code for ' + tgt.name : who.name + ' is choosing a code…', W / 2, R.y, Math.max(11, Math.min(17, (W - 24) / ((this.humanTurn() ? who.name.length + tgt.name.length + 24 : who.name.length + 20) * .56))), '#ffd166');
+      const x0 = W / 2 - (this.n - 1) * p / 2; for (let i = 0; i < this.n; i++) this.peg(c, x0 + i * p, R.y + 50, p * .4, this.humanTurn() ? (st.cur[i] != null ? st.cur[i] : null) : null);
+      CD.label(c, 'Repeats allowed · ' + this.nc + ' colours', W / 2, R.y + 50 + p * .7 + 10, 13); }
+    else { this.drawBoard(c, 0); this.drawBoard(c, 1); }
+    if (this.humanTurn()) for (const t of this.targets()) { if (t.col != null) { const foc = f && f.id === t.id; c.globalAlpha = t.legal === false ? .45 : 1; c.fillStyle = 'rgba(0,0,0,.25)'; rrect(c, t.x, t.y, t.w, t.h, 12); c.fill(); this.peg(c, t.x + t.w / 2, t.y + t.h / 2, t.w * .36, t.col); c.globalAlpha = 1; if (foc) BR.drawCursor(c, t.x - 3, t.y - 3, t.w + 6, t.h + 6, this.t); } else { this.drawBtn(c, t, t.label, t.id === 'ok' ? '#3cc9a4' : '#1d9bb5'); if (f && f.id === t.id) BR.drawCursor(c, t.x - 3, t.y - 3, t.w + 6, t.h + 6, this.t); } }
+    if (st.phase === 'guess' && this.log) CD.label(c, this.log, W / 2, H - 56, 13);
+    this.drawFx(c); this.drawBanner(c, W, H);
+  }
+  testClicks() {
+    const st = this.st, tg = this.targets(), at = id => { const t = tg.find(q => q.id === id); return t ? [t.x + t.w / 2, t.y + t.h / 2] : null; };
+    if (st.phase === 'set') return [at('rnd'), at('ok')].filter(Boolean);
+    const out = []; for (let i = 0; i < st.cur.length; i++) out.push(at('del')); const g = this.aiPick(st.turn, 'medium').code; for (const col of g) out.push(at('c' + col)); out.push(at('ok')); return out.filter(Boolean);
+  }
+}
+BR.registerGame({
+  id: 'mastermind', name: 'Codebreaker Duel', tag: 'Set a secret colour code, then race to crack your rival\u2019s.', color: '#7b4bb3', wave: 5,
+  options: [{ id: 'pegs', label: 'Code length', choices: [[4, '4 pegs'], [5, '5 pegs']], def: 0 }, { id: 'colors', label: 'Colours', choices: [[6, '6 colours'], [8, '8 colours']], def: 0 }],
+  localNote: 'Pass and play: each player hides a code behind a "Pass to…" cover, then you take turns guessing.',
+  howTo: ['First, each player secretly sets a code of coloured pegs for the other to crack (colours can repeat). Every colour also has a symbol, so you can tell them apart without colour.', 'Then take turns guessing. After each guess you get clues: a dark peg for each colour in exactly the right spot, a white peg for each right colour in the wrong spot.', 'You both get the same number of guesses. Crack it in fewer guesses than your rival to win. Up to 10 guesses each.', 'If nobody cracks it, the closest final clue (most dark pegs, then white) wins.'],
+  controls: { pad: 'D-pad picks a colour, A adds it, B deletes. Move down to Guess and press A.', key: 'Arrows + Enter add colours, Backspace deletes; Enter on Guess submits.', touch: 'Tap colours to fill the row, ⌫ to delete, then Guess.' },
+  icon(c, x, y, s) { const p = Codebreaker.prototype; [0, 2, 4, 6].forEach((col, i) => p.peg(c, x - s * .6 + i * s * .4, y - s * .15, s * .17, col)); for (let i = 0; i < 4; i++) { c.fillStyle = i < 2 ? '#12355b' : '#fff'; c.beginPath(); c.arc(x - s * .3 + i * s * .2, y + s * .35, s * .07, 0, TAU); c.fill(); } },
+  create: s => new Codebreaker(s)
+});
+/* ================= Blackjack (two players vs the house, most chips wins) ================= */
+function bjVal(h) { let t = 0, a = 0; for (const c of h) { const v = c.r === 1 ? 11 : Math.min(10, c.r); t += v; if (c.r === 1) a++; } while (t > 21 && a) { t -= 10; a--; } return { t, soft: a > 0 }; }
+const bjBJ = h => h.length === 2 && bjVal(h).t === 21;
+class Blackjack extends PickGame {
+  constructor(s) {
+    super(s); this.need = +(s.opts.hands || 10); this.start = +(s.opts.chips || 100);
+    this.st = { chips: [this.start, this.start], bet: [0, 0], hands: [[], []], dealer: [], shoe: [], phase: 'bet', turn: 0, handNo: 1, done: [false, false], dbl: [false, false], res: ['', ''], hole: true, first: 0 };
+    this.newShoe(); this.log = 'Hand 1 of ' + this.need + ': place your bets';
+  }
+  newShoe() { let d = []; for (let k = 0; k < 4; k++) d = d.concat(CD.deck().map(c => ({ r: c.r, s: c.s, id: k * 52 + c.id }))); this.st.shoe = shuffle(d); }
+  draw1() { if (this.st.shoe.length < 20) { this.newShoe(); BR.toast('New shoe shuffled'); } return this.st.shoe.pop(); }
+  seat() { return this.st.turn; }
+  resize(W, H) { this.W = W; this.H = H; }
+  L() {
+    const W = this.W, H = this.H, top = BR.HUD_H + 8, side = W > H * 1.2; const { cw, ch } = CD.size(W, H, 9); const c2 = Math.round(Math.min(cw, (H - top - 140) / 3.6 / 1.42)), h2 = Math.round(c2 * 1.42);
+    const dy = top + 4, py = side ? dy + h2 + 40 : dy + h2 + 56; return { cw: c2, ch: h2, side, dy, py, cx: W / 2, colX: [W * (side ? .3 : .27), W * (side ? .7 : .73)], by: side ? H - 108 : H - 110 };
+  }
+  betOpts(seat) { const c = this.st.chips[seat]; const o = [5, 10, 25, 50].filter(v => v <= c); if (c > 0 && (!o.length || c > o[o.length - 1])) o.push(c); return o; }
+  canDbl(seat) { const st = this.st; return st.hands[seat].length === 2 && st.chips[seat] >= st.bet[seat] * 2 && !st.dbl[seat]; }
+  targets() {
+    if (!this.W || !this.humanTurn()) return []; const st = this.st, L = this.L(), seat = st.turn, out = [];
+    if (st.phase === 'bet') { const o = this.betOpts(seat), bw = Math.min(110, (this.W - 30) / o.length - 8), x0 = this.W / 2 - (o.length * (bw + 8) - 8) / 2; o.forEach((v, i) => out.push({ id: 'b' + i, x: x0 + i * (bw + 8), y: L.by, w: bw, h: 54, r: 0, label: v === st.chips[seat] && v > 50 ? 'All ' + v : 'Bet ' + v, mv: { bet: v }, def: i === Math.min(1, o.length - 1) })); return out; }
+    if (st.phase === 'play') { const acts = [['hit', 'Hit', true], ['stand', 'Stand', true], ['dbl', 'Double', this.canDbl(seat)]], bw = Math.min(130, (this.W - 30) / 3 - 8), x0 = this.W / 2 - (3 * (bw + 8) - 8) / 2;
+      acts.forEach(([id, lab, ok], i) => out.push({ id, x: x0 + i * (bw + 8), y: L.by, w: bw, h: 54, r: 0, label: lab, legal: ok, why: 'Double needs your first two cards and enough chips', mv: { act: id }, def: id === 'stand' && bjVal(st.hands[seat]).t >= 17 || id === 'hit' && bjVal(st.hands[seat]).t < 17 })); }
+    return out;
+  }
+  commit(m) {
+    const st = this.st, me = st.turn, P = this.s.players; if (this.s.over || !m) return;
+    if (m.bet) { if (st.phase !== 'bet') return; st.bet[me] = Math.min(m.bet, st.chips[me]); Snd.play('coin'); this.log = P[me].name + ' bets ' + st.bet[me];
+      const nx = 1 - me; if (st.bet[nx] === 0 && st.chips[nx] > 0) { st.turn = nx; return; } this.deal(); return; }
+    if (st.phase !== 'play') return; const h = st.hands[me];
+    if (m.act === 'hit' || m.act === 'dbl') { if (m.act === 'dbl') { if (!this.canDbl(me)) return; st.dbl[me] = true; st.bet[me] *= 2; this.log = P[me].name + ' doubles to ' + st.bet[me]; }
+      const cd = this.draw1(); this.flyTo(cd, me, h.length); Snd.play('clack'); this.anim = { t: 0, d: .3, done: () => { h.push(cd); const v = bjVal(h).t; if (v > 21) { st.res[me] = 'BUST'; this.say(P[me].name.split(' ')[0].toUpperCase() + ' BUSTS', '#ff6f59', .9); Snd.play('splash'); this.nextPlayer(); } else if (v === 21 || m.act === 'dbl') this.nextPlayer(); } }; return; }
+    if (m.act === 'stand') { Snd.play('select'); this.log = P[me].name + ' stands on ' + bjVal(h).t; this.nextPlayer(); }
+  }
+  flyTo(cd, seat, i, up) { const L = this.L(), x1 = seat < 0 ? L.cx - L.cw + i * L.cw * .55 : L.colX[seat] - L.cw / 2 + i * L.cw * .32, y1 = seat < 0 ? L.dy : L.py + i * 4; this.fly.push({ cd, up: up !== false, x0: this.W - L.cw - 10, y0: L.dy, x1, y1, t: 0, d: .28 }); }
+  deal() {
+    const st = this.st; st.phase = 'dealing'; st.hands = [[], []]; st.dealer = []; st.hole = true; st.done = [st.bet[0] === 0, st.bet[1] === 0]; st.dbl = [false, false]; st.res = ['', ''];
+    const seq = []; for (let r = 0; r < 2; r++) { for (const s2 of [0, 1]) if (st.bet[s2]) seq.push(s2); seq.push(-1); }
+    const step = () => { if (!seq.length) { this.afterDeal(); return; } const who = seq.shift(), cd = this.draw1(), h = who < 0 ? st.dealer : st.hands[who]; this.flyTo(cd, who, h.length, !(who < 0 && h.length === 1)); Snd.play('clack'); this.anim = { t: 0, d: .22, done: () => { h.push(cd); step(); } }; };
+    step();
+  }
+  afterDeal() {
+    const st = this.st; const up = st.dealer[0], peek = up.r === 1 || up.r >= 10;
+    if (peek && bjBJ(st.dealer)) { st.hole = false; this.say('DEALER BLACKJACK', '#ff6f59', 1.2); Snd.play('splash'); for (const s2 of [0, 1]) if (st.bet[s2]) st.res[s2] = bjBJ(st.hands[s2]) ? 'PUSH' : 'LOSE'; this.settle(); return; }
+    for (const s2 of [0, 1]) if (st.bet[s2] && bjBJ(st.hands[s2])) { st.res[s2] = 'BLACKJACK'; st.done[s2] = true; Snd.play('king'); }
+    st.phase = 'play'; st.turn = st.first; if (st.done[st.turn]) this.nextPlayer(true);
+  }
+  nextPlayer(skipMark) { const st = this.st; if (!skipMark) st.done[st.turn] = true; const o = 1 - st.turn; if (!st.done[o]) { st.turn = o; return; } this.dealerPlay(); }
+  dealerPlay() {
+    const st = this.st; st.phase = 'dealer'; st.hole = false; Snd.play('place'); const live = [0, 1].some(s2 => st.bet[s2] && !st.res[s2]);
+    const step = () => { const v = bjVal(st.dealer); if (!live || v.t >= 17) { this.finishDealer(); return; } const cd = this.draw1(); this.flyTo(cd, -1, st.dealer.length); Snd.play('clack'); this.anim = { t: 0, d: .45, done: () => { st.dealer.push(cd); step(); } }; };
+    this.anim = { t: 0, d: .5, done: step };
+  }
+  finishDealer() { const st = this.st, d = bjVal(st.dealer).t; for (const s2 of [0, 1]) { if (!st.bet[s2] || st.res[s2]) continue; const v = bjVal(st.hands[s2]).t; st.res[s2] = d > 21 || v > d ? 'WIN' : v === d ? 'PUSH' : 'LOSE'; } this.settle(); }
+  settle() {
+    const st = this.st, P = this.s.players, msg = [];
+    for (const s2 of [0, 1]) { if (!st.bet[s2]) continue; const b = st.bet[s2], r = st.res[s2]; const d = r === 'BLACKJACK' ? Math.floor(b * 1.5) : r === 'WIN' ? b : r === 'PUSH' ? 0 : -b; st.chips[s2] += d; msg.push(P[s2].name.split(' ')[0] + ' ' + (r === 'BUST' ? 'busts' : r.toLowerCase()) + ' ' + (d > 0 ? '+' + d : d < 0 ? d : '±0')); if (d > 0) this.s.rumble(s2, 120, .4, .4); }
+    st.phase = 'settle'; this.log = msg.join(' · '); Snd.play(msg.some(m => m.includes('+')) ? 'coin' : 'drop');
+    this.anim = { t: 0, d: 2.2, done: () => {
+      const [a, b] = st.chips; if (st.handNo >= this.need || a <= 0 || b <= 0) { this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Chips ' + a + ' – ' + b + ' after ' + st.handNo + ' hand' + (st.handNo > 1 ? 's' : ''), best: this.s.mode === 'ai' ? st.chips[this.s.humanSeat] : Math.max(a, b) }); return; }
+      st.handNo++; st.first = 1 - st.first; st.bet = [0, 0]; st.hands = [[], []]; st.dealer = []; st.res = ['', '']; st.phase = 'bet'; st.turn = st.first; this.log = 'Hand ' + st.handNo + ' of ' + this.need + ': place your bets';
+    } };
+  }
+  aiPick(seat, diff) {
+    const st = this.st;
+    if (st.phase === 'bet') { const c = st.chips[seat], o = this.betOpts(seat); if (diff === 'easy') return { bet: pick(o.filter(v => v <= 25).length ? o.filter(v => v <= 25) : o) }; let want = Math.max(5, Math.round(c * .1 / 5) * 5);
+      if (diff === 'hard') { const left = this.need - st.handNo + 1, gap = st.chips[1 - seat] - c; if (gap > 0 && left <= 3) want = Math.min(c, gap + 5); else if (gap < -60 && left <= 3) want = 5; }
+      let best = o[0]; for (const v of o) if (Math.abs(v - want) < Math.abs(best - want)) best = v; return { bet: best }; }
+    if (st.phase !== 'play') return null; const v = bjVal(st.hands[seat]), up = Math.min(10, st.dealer[0].r === 1 ? 11 : st.dealer[0].r), dbl = this.canDbl(seat);
+    if (diff === 'easy') return { act: v.t < 12 + ri(5) ? 'hit' : 'stand' };
+    if (diff === 'medium') { if (dbl && !v.soft && (v.t === 11 || v.t === 10 && up < 10)) return { act: 'dbl' }; return { act: v.t < 17 || v.soft && v.t < 18 ? 'hit' : 'stand' }; }
+    if (v.soft) { if (v.t >= 19) return { act: 'stand' }; if (v.t === 18) return { act: dbl && up >= 3 && up <= 6 ? 'dbl' : up >= 9 ? 'hit' : 'stand' }; if (dbl && (v.t === 17 && up >= 3 && up <= 6 || v.t >= 15 && up >= 4 && up <= 6 || up >= 5 && up <= 6)) return { act: 'dbl' }; return { act: 'hit' }; }
+    if (v.t >= 17) return { act: 'stand' }; if (v.t >= 13) return { act: up <= 6 ? 'stand' : 'hit' }; if (v.t === 12) return { act: up >= 4 && up <= 6 ? 'stand' : 'hit' };
+    if (dbl && (v.t === 11 || v.t === 10 && up <= 9 || v.t === 9 && up >= 3 && up <= 6)) return { act: 'dbl' }; return { act: 'hit' };
+  }
+  thinkMs() { return this.st.phase === 'bet' ? 500 : 650; }
+  humanTurn() { const p = this.st.phase; return (p === 'bet' || p === 'play') && super.humanTurn(); }
+  update(dt) { super.update(dt); }
+  hud() { const st = this.st; return { score: st.chips, turn: this.s.over || st.phase === 'dealer' || st.phase === 'settle' ? -1 : st.turn, status: st.phase === 'bet' ? this.status('place a bet') : st.phase === 'play' ? this.status('hit or stand on ' + bjVal(st.hands[st.turn]).t) : 'Hand ' + st.handNo + ' of ' + this.need + ' · dealer plays' }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? '◀ ▶ choose · Ⓐ confirm' : L === 'key' ? '← → choose · Enter confirm' : this.st.phase === 'bet' ? 'Tap a bet' : 'Tap Hit, Stand or Double'; }
+  draw(c, W, H) {
+    if (this.W !== W || this.H !== H) this.resize(W, H); CD.felt(c, W, H); const st = this.st, L = this.L(), P = this.s.players, f = this.humanTurn() ? this.focused() : null;
+    c.save(); c.strokeStyle = 'rgba(255,209,102,.35)'; c.lineWidth = 2; c.beginPath(); c.ellipse(W / 2, L.dy - 40, W * .48, L.py - L.dy + 110, 0, .15 * Math.PI, .85 * Math.PI); c.stroke(); c.restore();
+    CD.label(c, 'BLACKJACK PAYS 3 TO 2 · DEALER STANDS ON 17', W / 2, L.py - 18, Math.min(13, W / 34), 'rgba(255,209,102,.8)');
+    st.dealer.forEach((cd, i) => CD.draw(c, L.cx - L.cw + i * L.cw * .55, L.dy, L.cw, L.ch, cd, !(i === 1 && st.hole)));
+    if (st.dealer.length) CD.label(c, 'Dealer' + (st.hole ? '' : ' · ' + bjVal(st.dealer).t), L.cx - L.cw - 12, L.dy + L.ch / 2, 13, '#fff', 'right');
+    for (const s2 of [0, 1]) { const x = L.colX[s2], act = st.turn === s2 && (st.phase === 'play' || st.phase === 'bet') && !this.s.over;
+      st.hands[s2].forEach((cd, i) => CD.draw(c, x - L.cw / 2 + i * L.cw * .32, L.py + i * 4, L.cw, L.ch, cd, true));
+      const v = st.hands[s2].length ? ' · ' + bjVal(st.hands[s2]).t : ''; CD.label(c, P[s2].name.split(' ')[0] + ' · ' + st.chips[s2] + ' chips', x, L.py + L.ch + 22, 14, act ? '#ffd166' : '#fff');
+      CD.label(c, (st.bet[s2] ? 'bet ' + st.bet[s2] : st.phase === 'bet' ? 'betting…' : '') + v, x, L.py + L.ch + 40, 13, '#fff');
+      if (st.bet[s2]) { c.fillStyle = '#ff6f59'; c.beginPath(); c.arc(x + L.cw * .9, L.py - 6, 12, 0, TAU); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 3; c.setLineDash([4, 3]); c.stroke(); c.setLineDash([]); }
+      if (st.res[s2]) CD.label(c, st.res[s2], x, L.py - 6, 18, st.res[s2] === 'LOSE' || st.res[s2] === 'BUST' ? '#ff8fab' : '#ffd166'); }
+    for (let k = 0; k < 4; k++) CD.draw(c, W - L.cw - 10 - k * 2, L.dy - k * 2, L.cw, L.ch, null, false);
+    for (const t of this.targets()) { this.drawBtn(c, t, t.label, t.id === 'stand' ? '#1d9bb5' : t.id === 'dbl' ? '#8a5cd6' : '#ff6f59'); if (f && f.id === t.id && BR.showCursor()) BR.drawCursor(c, t.x - 4, t.y - 4, t.w + 8, t.h + 8, this.t); }
+    if (!this.humanTurn()) CD.label(c, this.log, W / 2, L.by + 26, 14);
+    for (const fl of this.fly) { const k = fl.t * fl.t * (3 - 2 * fl.t); CD.draw(c, lerp(fl.x0, fl.x1, k), lerp(fl.y0, fl.y1, k), L.cw, L.ch, fl.cd, fl.up); }
+    this.drawFx(c); this.drawBanner(c, W, H);
+  }
+}
+BR.registerGame({
+  id: 'blackjack', name: 'Blackjack', tag: 'Beat the house and finish with more chips than your rival.', color: '#1d2b3a', wave: 5,
+  options: [{ id: 'hands', label: 'Length', choices: [[5, '5 hands'], [10, '10 hands'], [15, '15 hands']], def: 1 }, { id: 'chips', label: 'Starting chips', choices: [[100, '100'], [250, '250']], def: 0 }],
+  howTo: ['You both play against the dealer, but you are racing each other: whoever has more chips at the end wins. Go broke and the game ends.', 'Bet, then get two cards. Get closer to 21 than the dealer without going over. Number cards count their number, faces count 10, aces 1 or 11.', 'Hit takes a card, Stand stops. Double doubles your bet for exactly one more card (first two cards only). Splitting is left out to keep the duel quick.', 'Dealer hits until 17 or more. Blackjack (an ace and a ten-card) pays 3 to 2. Ties push: your bet comes back.'],
+  controls: { pad: 'Left/right picks a bet or action, A confirms. Each player can use their own controller.', key: 'Arrows choose, Enter confirms.', touch: 'Tap a bet, then Hit, Stand or Double.' },
+  icon(c, x, y, s) { CD.draw(c, x - s * .6, y - s * .5, s * .62, s * .88, { r: 1, s: 0 }, true); c.save(); c.translate(x + s * .15, y); c.rotate(.2); CD.draw(c, -s * .31, -s * .44, s * .62, s * .88, { r: 13, s: 1 }, true); c.restore(); },
+  create: s => new Blackjack(s)
+});
+/* ================= Trivia Duel question bank (offline, family-friendly) ================= */
+const TQ_RAW = "#Beach & Ocean\nWhat is the largest ocean on Earth?|Pacific|Atlantic|Indian|Arctic\nWhat causes ocean tides?|The Moon's gravity|Wind|Earthquakes|Whales swimming\nWhich sea creature has three hearts?|Octopus|Jellyfish|Starfish|Crab\nWhat do you call a baby sea turtle that has just hatched?|Hatchling|Calf|Pup|Kit\nRoughly how much of Earth's surface is covered by ocean?|About 70%|About 30%|About 50%|About 90%\nWhich ocean lies between Africa and Australia?|Indian Ocean|Pacific Ocean|Arctic Ocean|Southern Ocean\nWhat is the deepest known point in the ocean?|Challenger Deep|Puerto Rico Trench|Java Trench|Tonga Deep\nA group of fish swimming together is called a...|School|Herd|Flock|Pack\nWhich animal can regrow a lost arm?|Starfish|Clam|Dolphin|Seagull\nWhat is the largest animal that has ever lived?|Blue whale|Megalodon|Whale shark|Giant squid\nSand on many beaches is mostly made of which mineral?|Quartz|Diamond|Gold|Iron\nWhat kind of animal is a seahorse?|Fish|Mammal|Reptile|Insect\nIn seahorses, which parent carries the eggs until they hatch?|The father|The mother|Both take turns|Neither\nWhat is the name for the line where the sea seems to meet the sky?|Horizon|Equator|Shoreline|Meridian\nWhich sea is so salty that people float easily in it?|Dead Sea|Red Sea|Black Sea|North Sea\nCoral reefs are built by tiny animals called...|Polyps|Plankton|Krill|Barnacles\nWhat is the largest coral reef system in the world?|Great Barrier Reef|Belize Barrier Reef|Florida Reef|Red Sea Reef\nA crab that lives in borrowed shells is called a...|Hermit crab|King crab|Blue crab|Ghost crab\nWhich ocean is the smallest?|Arctic|Indian|Southern|Atlantic\nWhat do lighthouses help ships do?|Avoid danger in the dark|Catch fish|Measure wind|Send mail\nWhat is a baby whale called?|Calf|Cub|Joey|Fry\nWhich bird is famous for diving for fish and having a huge throat pouch?|Pelican|Flamingo|Robin|Owl\nWhat are ocean waves mostly caused by?|Wind|Sharks|Sand|Rain\nWhat is the name of the warm current that flows up the U.S. East Coast?|Gulf Stream|Humboldt Current|Labrador Current|Kuroshio\nThe \"Ring of Fire\" is a zone of volcanoes around which ocean?|Pacific|Atlantic|Indian|Arctic\nWhat is a \"rip current\"?|A strong current flowing away from shore|A wave that breaks twice|A tide pool|A type of seaweed\nIf caught in a rip current, which way should you swim?|Parallel to the shore|Straight to shore|Straight out to sea|Down to the bottom\nWhich fish is known for puffing up into a spiky ball?|Pufferfish|Clownfish|Tuna|Salmon\nClownfish live safely among the tentacles of which animal?|Sea anemone|Jellyfish|Octopus|Sea cucumber\nHow many arms does a typical starfish have?|Five|Three|Eight|Ten\nWhat do sea otters often use to crack open shellfish?|Rocks|Sticks|Their teeth only|Shells\nWhat is the largest fish in the sea?|Whale shark|Great white shark|Blue marlin|Ocean sunfish\nWhich gas do ocean plants and algae release that we breathe?|Oxygen|Helium|Carbon monoxide|Neon\nWhich animal is known as a \"sea cow\"?|Manatee|Walrus|Seal|Narwhal\nWhich whale has a long spiral tusk?|Narwhal|Orca|Humpback|Beluga\nWhat is a sandbar?|A ridge of sand in shallow water|A beach snack stand|A sand-filled bag|A type of crab\n#Animals\nWhat is the fastest land animal?|Cheetah|Lion|Pronghorn|Horse\nWhat is the tallest animal in the world?|Giraffe|Elephant|Ostrich|Moose\nWhat is a group of lions called?|Pride|Pack|Gaggle|School\nWhich bird is a symbol of the United States?|Bald eagle|Turkey|Robin|Blue jay\nHow many legs does a spider have?|Eight|Six|Ten|Four\nWhich animal is known for changing its skin color to blend in?|Chameleon|Frog|Snake|Turtle\nWhat do pandas mostly eat?|Bamboo|Fish|Berries|Grass\nWhat is the largest land animal?|African elephant|Rhinoceros|Hippopotamus|Giraffe\nWhich mammal can truly fly?|Bat|Flying squirrel|Sugar glider|Penguin\nWhat is a baby kangaroo called?|Joey|Kid|Pup|Cub\nWhich animal sleeps hanging upside down?|Bat|Owl|Horse|Koala\nHow many legs does an insect have?|Six|Eight|Four|Ten\nWhich bird cannot fly but is the largest bird alive?|Ostrich|Emu|Penguin|Albatross\nA frog starts life as a...|Tadpole|Caterpillar|Larva fish|Chick\nWhat kind of animal is a Komodo dragon?|Lizard|Snake|Dinosaur|Crocodile\nWhich animal has black and white stripes and lives in Africa?|Zebra|Panda|Skunk|Badger\nWhat is a male deer called?|Buck|Bull|Ram|Boar\nBees make honey from which part of flowers?|Nectar|Stems|Roots|Leaves\nWhat is the slowest-moving mammal often seen hanging in trees?|Sloth|Koala|Lemur|Tortoise\nWhich big cat has a mane?|Lion (males)|Tiger|Leopard|Jaguar\nWhat do caterpillars turn into?|Butterflies or moths|Beetles|Bees|Spiders\nWhich animal is known for its black mask and ringed tail?|Raccoon|Skunk|Opossum|Fox\nWhat is the largest species of bear?|Polar bear|Black bear|Panda|Sun bear\nWhich bird is known for repeating words and sounds?|Parrot|Crow|Pigeon|Sparrow\nWhich animal carries its home on its back?|Snail|Ant|Beaver|Squirrel\nWhich animal builds dams in rivers?|Beaver|Otter|Muskrat|Duck\nOwls are mostly active at what time?|Night|Noon|Morning only|Afternoon only\nHow many humps does a dromedary camel have?|One|Two|Three|None\nWhat color is a polar bear's skin under its fur?|Black|White|Pink|Yellow\nA shark's skeleton is made of...|Cartilage|Bone|Shell|Wood-like fibers\nWhat is a baby goat called?|Kid|Lamb|Calf|Foal\nWhich animal is the largest member of the cat family?|Tiger|Lion|Jaguar|Cougar\nWhich insect lights up at night?|Firefly|Ladybug|Moth|Cricket\nWhat does a herbivore eat?|Plants|Meat|Both plants and meat|Only insects\n#Science\nWhat is H2O better known as?|Water|Salt|Oxygen|Sugar\nWhat planet do we live on?|Earth|Mars|Venus|Jupiter\nAt what temperature does water freeze in Fahrenheit?|32°F|0°F|100°F|212°F\nAt what temperature does water boil at sea level in Celsius?|100°C|50°C|212°C|0°C\nWhat gas do plants take in from the air?|Carbon dioxide|Oxygen|Helium|Nitrogen only\nWhat force keeps us on the ground?|Gravity|Magnetism|Friction|Wind\nHow many bones are in the adult human body?|206|106|306|500\nWhat is the hardest natural substance?|Diamond|Gold|Iron|Granite\nWhat part of the plant makes food using sunlight?|Leaves|Roots|Flowers|Seeds\nWhat is the center of an atom called?|Nucleus|Electron|Shell|Orbit\nWhich organ pumps blood through the body?|Heart|Lungs|Liver|Stomach\nWhat are the three states of matter we usually see?|Solid, liquid, gas|Hot, warm, cold|Rock, paper, metal|Earth, wind, fire\nWhat do we call animals that are active during the day?|Diurnal|Nocturnal|Aquatic|Dormant\nWhat is the largest organ of the human body?|Skin|Liver|Brain|Heart\nWhat color do you get when you mix blue and yellow?|Green|Purple|Orange|Brown\nWhich scientist is famous for the theory of relativity?|Albert Einstein|Isaac Newton|Marie Curie|Thomas Edison\nWhat does a thermometer measure?|Temperature|Weight|Speed|Time\nWhat kind of energy comes from the Sun?|Solar|Wind|Nuclear from Earth|Geothermal\nLight travels faster than sound. True or false?|True|False|They are equal|Only at night\nWhich metal is liquid at room temperature?|Mercury|Iron|Copper|Silver\nWhat is the chemical symbol for gold?|Au|Go|Gd|Ag\nWhat is the chemical symbol for oxygen?|O|Ox|Og|Om\nHow many teeth do most adults have?|32|20|28|40\nWhat is the name for a scientist who studies rocks?|Geologist|Biologist|Astronomer|Botanist\nWhich part of the eye controls how much light gets in?|Iris|Eyelash|Eyebrow|Tear duct\nWhat do bees carry from flower to flower that helps plants make seeds?|Pollen|Water|Honey|Wax\nWhat is a rainbow made of?|Sunlight split into colors|Colored clouds|Paint in the air|Moonlight\nWhat makes a compass needle point north?|Earth's magnetic field|The Moon|The Sun's gravity|Wind\nWhat are clouds made of?|Tiny water droplets or ice|Smoke|Cotton|Dust only\nWhich invention is Alexander Graham Bell known for?|Telephone|Light bulb|Airplane|Radio\nWho is credited with discovering penicillin?|Alexander Fleming|Louis Pasteur|Jonas Salk|Charles Darwin\nWhat is the boiling point of water in Fahrenheit at sea level?|212°F|100°F|180°F|250°F\nWhat do we call molten rock after it reaches Earth's surface?|Lava|Magma|Basalt|Ash\nWhat simple machine is a ramp?|Inclined plane|Lever|Pulley|Wheel and axle\nHow many sides does a hexagon have?|Six|Five|Seven|Eight\n#Space\nWhat is the closest star to Earth?|The Sun|Proxima Centauri|Sirius|Polaris\nWhich planet is known as the Red Planet?|Mars|Venus|Jupiter|Mercury\nWhat is the largest planet in our solar system?|Jupiter|Saturn|Neptune|Earth\nWhich planet is famous for its bright rings?|Saturn|Mars|Mercury|Venus\nWho was the first person to walk on the Moon?|Neil Armstrong|Buzz Aldrin|Yuri Gagarin|John Glenn\nIn what year did people first land on the Moon?|1969|1959|1979|1989\nWhich planet is closest to the Sun?|Mercury|Venus|Earth|Mars\nWhat galaxy do we live in?|Milky Way|Andromeda|Whirlpool|Sombrero\nHow long does it take Earth to orbit the Sun?|About one year|One day|One month|Ten years\nWhat is the hottest planet in our solar system?|Venus|Mercury|Mars|Jupiter\nWho was the first person to travel into space?|Yuri Gagarin|Neil Armstrong|Alan Shepard|Sally Ride\nWho was the first American woman in space?|Sally Ride|Amelia Earhart|Mae Jemison|Christa McAuliffe\nWhat do we call a rock from space that lands on Earth?|Meteorite|Comet|Asteroid belt|Nebula\nWhat is the name of NASA's mission program that landed people on the Moon?|Apollo|Gemini|Mercury|Artemis I\nHow many planets are in our solar system?|Eight|Nine|Seven|Ten\nWhich planet spins on its side?|Uranus|Neptune|Saturn|Mars\nWhat is a \"shooting star\" really?|A meteor burning up|A falling star|A comet hitting Earth|A satellite\nWhich dwarf planet was once called the ninth planet?|Pluto|Ceres|Eris|Haumea\nWhat causes the phases of the Moon?|How much of its sunlit side we see|Earth's shadow every night|Clouds|The Moon changing shape\nThe Great Red Spot is a giant storm on which planet?|Jupiter|Mars|Saturn|Neptune\nWhat is the name of the space telescope launched in 1990?|Hubble|Kepler|Galileo|Voyager\nWhat is the International Space Station?|A lab orbiting Earth with astronauts|A Moon base|A telescope on Mars|A rocket factory\nHow long does it take the Moon to orbit Earth, roughly?|About a month|About a day|About a year|About a week\nWhat is a group of stars that forms a pattern called?|Constellation|Galaxy|Comet|Orbit\nWhich star is known as the North Star?|Polaris|Sirius|Vega|Betelgeuse\nWhat is the Sun mostly made of?|Hydrogen and helium|Fire and lava|Iron|Oxygen\nWhich planet has the most known moons (as of the mid-2020s)?|Saturn|Earth|Mars|Venus\nWhat is the name of the rover that landed on Mars in 2021?|Perseverance|Spirit|Sojourner|Opportunity\n#Geography\nWhat is the capital of France?|Paris|London|Rome|Madrid\nWhat is the longest river in the world (by most measures)?|Nile|Amazon|Mississippi|Yangtze\nWhat is the largest country by area?|Russia|Canada|China|United States\nWhich continent is the Sahara Desert on?|Africa|Asia|Australia|South America\nWhat is the tallest mountain above sea level?|Mount Everest|K2|Kilimanjaro|Denali\nHow many continents are there?|Seven|Five|Six|Eight\nWhat is the capital of the United States?|Washington, D.C.|New York City|Philadelphia|Boston\nWhich U.S. state is made up entirely of islands?|Hawaii|Florida|Alaska|Rhode Island\nWhat is the largest U.S. state by area?|Alaska|Texas|California|Montana\nWhich country is shaped like a boot?|Italy|Spain|Greece|Portugal\nWhat is the capital of Canada?|Ottawa|Toronto|Vancouver|Montreal\nMount Kilimanjaro is in which country?|Tanzania|Kenya|Egypt|South Africa\nThe Amazon rainforest is mostly in which country?|Brazil|Peru|Colombia|Mexico\nWhich river flows through Egypt?|Nile|Tigris|Congo|Danube\nWhat is the capital of Japan?|Tokyo|Kyoto|Osaka|Seoul\nWhich is the smallest U.S. state by area?|Rhode Island|Delaware|Connecticut|Vermont\nThe Great Lakes are on the border of the U.S. and which country?|Canada|Mexico|Russia|Greenland\nWhat is the capital of Australia?|Canberra|Sydney|Melbourne|Perth\nWhich country has the most people (mid-2020s)?|India|China|United States|Indonesia\nIn which U.S. state is the Grand Canyon?|Arizona|Utah|Nevada|Colorado\nWhich continent is the coldest?|Antarctica|Europe|Asia|North America\nWhat is the capital of Italy?|Rome|Milan|Venice|Naples\nWhat is the longest river in the United States?|Missouri|Mississippi|Colorado|Ohio\nWhich country is home to the kangaroo?|Australia|New Zealand|South Africa|Brazil\nWhat do you call a piece of land surrounded by water?|Island|Peninsula|Isthmus|Delta\nWhat is the capital of the United Kingdom?|London|Edinburgh|Dublin|Manchester\nWhich mountain range runs along the western side of South America?|Andes|Alps|Rockies|Himalayas\nWhich state is known as the Sunshine State?|Florida|California|Arizona|Hawaii\nThe Statue of Liberty stands in which city's harbor?|New York City|Boston|Philadelphia|Baltimore\nWhat is the capital of Mexico?|Mexico City|Cancún|Guadalajara|Tijuana\nWhich ocean borders the U.S. East Coast?|Atlantic|Pacific|Indian|Arctic\nWhich country has the Eiffel Tower?|France|Germany|Belgium|Switzerland\nWhat is a desert?|A very dry place with little rain|Any sandy beach|A cold forest|A tall mountain\nWhat is the capital of Spain?|Madrid|Barcelona|Seville|Lisbon\nIn which country are the ancient pyramids of Giza?|Egypt|Mexico|Peru|Greece\n#History\nWho was the first President of the United States?|George Washington|Thomas Jefferson|Abraham Lincoln|John Adams\nIn what year did the United States declare independence?|1776|1492|1812|1865\nWho wrote most of the Declaration of Independence?|Thomas Jefferson|Benjamin Franklin|George Washington|John Hancock\nWhich president is on the U.S. penny?|Abraham Lincoln|George Washington|Thomas Jefferson|Franklin D. Roosevelt\nWhich president is on the U.S. one-dollar bill?|George Washington|Abraham Lincoln|Benjamin Franklin|Andrew Jackson\nWho is on the U.S. $100 bill?|Benjamin Franklin|George Washington|Alexander Hamilton|Ulysses S. Grant\nIn 1492, who sailed across the Atlantic for Spain?|Columbus|Ferdinand Magellan|Leif Erikson|Vasco da Gama\nWhat ship carried the Pilgrims to America in 1620?|Mayflower|Santa Maria|Titanic|Endeavour\nWho was president during the U.S. Civil War?|Abraham Lincoln|Ulysses S. Grant|Andrew Johnson|James Buchanan\nWhich ancient people built pyramids at Giza?|Egyptians|Romans|Greeks|Vikings\nWho was the first woman to fly solo across the Atlantic?|Amelia Earhart|Bessie Coleman|Sally Ride|Harriet Quimby\nWhat famous ship sank in 1912 after hitting an iceberg?|Titanic|Lusitania|Mayflower|Queen Mary\nWho gave the \"I Have a Dream\" speech?|Martin Luther King Jr.|Malcolm X|John F. Kennedy|Frederick Douglass\nWho refused to give up her bus seat in Montgomery in 1955?|Rosa Parks|Harriet Tubman|Sojourner Truth|Ruby Bridges\nWhich wall came down in 1989, reuniting a divided city?|Berlin Wall|Great Wall|Hadrian's Wall|Western Wall\nWho invented the light bulb that became widely used?|Thomas Edison|Nikola Tesla|Benjamin Franklin|Henry Ford\nWho flew the first powered airplane in 1903?|The Wright brothers|Charles Lindbergh|Amelia Earhart|The Montgolfier brothers\nWhat did Paul Revere famously warn about on his midnight ride?|British troops coming|A storm|A fire|A flood\nWhich empire built the Colosseum?|Roman Empire|Greek Empire|Ottoman Empire|Persian Empire\nWhose expedition was the first to sail all the way around the world?|Ferdinand Magellan|Columbus|James Cook|Marco Polo\nWhich document begins with \"We the People\"?|U.S. Constitution|Declaration of Independence|Bill of Rights only|Gettysburg Address\nHow many original American colonies were there?|13|10|50|7\nWho led the Underground Railroad and helped many escape slavery?|Harriet Tubman|Clara Barton|Susan B. Anthony|Betsy Ross\nWhich president appears on Mount Rushmore with Washington, Jefferson and Lincoln?|Theodore Roosevelt|Franklin Roosevelt|John Adams|Andrew Jackson\nWho started the American Red Cross?|Clara Barton|Florence Nightingale|Eleanor Roosevelt|Dorothea Dix\nWhat was the name of the ship Charles Darwin sailed on?|HMS Beagle|HMS Bounty|Endurance|Victory\nWhich country gave the Statue of Liberty to the United States?|France|England|Spain|Italy\nWho invented the printing press with movable type in Europe?|Johannes Gutenberg|Leonardo da Vinci|Galileo|Isaac Newton\nWhich famous queen ruled Egypt and allied with Rome's Mark Antony?|Cleopatra|Nefertiti|Elizabeth I|Victoria\nWho was the 16th President of the United States?|Abraham Lincoln|Andrew Jackson|Ulysses S. Grant|James Polk\nIn what year did women win the right to vote nationwide in the U.S.?|1920|1865|1945|1776\n#Sports\nHow many players does a soccer team have on the field?|11|9|10|12\nIn which sport would you score a touchdown?|American football|Baseball|Basketball|Tennis\nHow many points is a basket from beyond the arc worth in basketball?|Three|Two|Four|One\nWhat is the national pastime often called \"America's game\"?|Baseball|Hockey|Golf|Bowling\nHow many holes are on a standard golf course?|18|9|12|21\nIn tennis, what is a score of zero called?|Love|Nil|Zero point|Duck\nHow often are the Summer Olympics held?|Every four years|Every year|Every two years|Every ten years\nWhat is the highest possible score in a game of bowling?|300|200|250|100\nWhat sport uses a puck?|Ice hockey|Lacrosse|Cricket|Water polo\nHow many bases are on a baseball diamond, counting home plate?|Four|Three|Five|Six\nIn which sport do you hear the word \"checkmate\"?|Chess|Checkers|Fencing|Polo\nWhere did surfing as we know it begin?|Hawaii and Polynesia|Australia|Brazil|Portugal\nHow many rings are on the Olympic flag?|Five|Four|Six|Seven\nWhat is the name of the championship game of the NFL?|Super Bowl|World Series|Stanley Cup|Final Four\nWhat trophy is awarded to the NHL champions?|Stanley Cup|Lombardi Trophy|Davis Cup|Ryder Cup\nIn basketball, how many players does each team have on the court?|Five|Six|Seven|Four\nWhat color belt is the top level in many karate schools?|Black|White|Yellow|Red\nIn bowling, what is it called when you knock down all ten pins with the first ball?|Strike|Spare|Split|Turkey\nThree strikes in a row in bowling is called a...|Turkey|Hat trick|Triple|Grand slam\nWhat do you call three goals by one player in a soccer or hockey game?|Hat trick|Turkey|Grand slam|Triple double\nHow long is a marathon, roughly?|26.2 miles|10 miles|13.1 miles|50 miles\nIn which sport is the Tour de France?|Cycling|Running|Sailing|Skiing\nWhich sport is played at Wimbledon?|Tennis|Golf|Cricket|Rugby\nWhat is the term for a score of one under par on a golf hole?|Birdie|Eagle|Bogey|Albatross\nIn baseball, how many strikes make an out?|Three|Two|Four|Five\nWhat shape is a rugby ball or American football?|Oval-ish (prolate)|Perfect sphere|Cube|Flat disc\nWhat is the ice surface for hockey called?|Rink|Court|Pitch|Diamond\nWhich famous athlete was nicknamed \"The Greatest\" in boxing?|Muhammad Ali|Mike Tyson|Joe Louis|Rocky Marciano\nWhat sport did Michael Jordan play professionally besides basketball?|Baseball|Football|Golf|Hockey\nHow many points is a touchdown worth (before the extra point)?|Six|Seven|Three|Two\n#Movies & TV\nIn \"Finding Nemo,\" what kind of fish is Nemo?|Clownfish|Blue tang|Goldfish|Shark\nWhat is the name of the snowman in \"Frozen\"?|Olaf|Sven|Kristoff|Hans\nIn \"Toy Story,\" what is the cowboy's name?|Woody|Buzz|Jessie|Rex\nWhat kind of animal is Simba in \"The Lion King\"?|Lion|Tiger|Cheetah|Leopard\nWhich character lives in a pineapple under the sea?|SpongeBob SquarePants|Patrick Star|Squidward|Mr. Krabs\nWhat color is Shrek?|Green|Blue|Purple|Orange\nIn \"Moana,\" what is the demigod's name?|Maui|Kai|Tamatoa|Pua\nWhat is Mickey Mouse's girlfriend's name?|Minnie|Daisy|Clarabelle|Penny\nIn \"The Wizard of Oz,\" what color are Dorothy's famous slippers?|Ruby red|Silver|Blue|Gold\nWhich toy space ranger says \"To infinity and beyond!\"?|Buzz Lightyear|Woody|Zurg|Rex\nWhat kind of creature is Dory in \"Finding Nemo\"?|Blue tang fish|Clownfish|Turtle|Octopus\nIn \"Cars,\" what is the race car's name?|Lightning McQueen|Mater|Doc Hudson|Chick Hicks\nWhat is the name of the princess in \"Frozen\" who has ice powers?|Elsa|Anna|Rapunzel|Ariel\nWhich mermaid wants to live on land in a famous Disney film?|Ariel|Elsa|Moana|Belle\nWhat is the name of the robot in the 2008 Pixar film about a lonely trash-collector?|WALL-E|EVE|R2-D2|Baymax\nWhich character says \"Just keep swimming\"?|Dory|Nemo|Marlin|Crush\nIn \"Up,\" what lifts the house into the sky?|Balloons|A tornado|A rocket|Birds\nWhat kind of animal is Baloo in \"The Jungle Book\"?|Bear|Panther|Tiger|Monkey\nWhat does the Beast give Belle as a special gift in \"Beauty and the Beast\"?|A library|A horse|A castle tower|A crown\nIn \"Zootopia,\" what kind of animal is Judy Hopps?|Rabbit|Fox|Sheep|Mouse\nWhat kind of animal is Scooby-Doo?|Great Dane dog|Beagle|Poodle|Cat\nWho lives in Bikini Bottom and is SpongeBob's best friend?|Patrick Star|Plankton|Gary|Sandy\nWhat is the name of Harry Potter's owl?|Hedwig|Errol|Crookshanks|Scabbers\nIn \"Encanto,\" what is the family's last name?|Madrigal|Rivera|Ramirez|Garcia\nIn \"Inside Out,\" which emotion is blue?|Sadness|Joy|Fear|Anger\nWhat is the name of the dog in \"Up\"?|Dug|Doug|Max|Bolt\n#Food\nWhat is the main ingredient in guacamole?|Avocado|Tomato|Pea|Cucumber\nWhich fruit is known for keeping the doctor away?|Apple|Banana|Orange|Grape\nWhat nut is used to make peanut butter?|Peanut (a legume)|Almond|Cashew|Walnut\nWhich grain is used to make popcorn?|Corn|Rice|Wheat|Oats\nWhat is the main ingredient of traditional hummus?|Chickpeas|Lentils|Black beans|Peanuts\nWhich vegetable is orange and said to help your eyes?|Carrot|Broccoli|Beet|Celery\nWhere did pizza as we know it come from?|Italy|France|Greece|Mexico\nSushi comes from which country?|Japan|China|Korea|Thailand\nWhich fruit has its seeds on the outside?|Strawberry|Blueberry|Cherry|Kiwi\nWhat is tofu made from?|Soybeans|Rice|Potatoes|Corn\nWhich spice is the most expensive by weight?|Saffron|Cinnamon|Pepper|Paprika\nWhat fruit is dried to make a raisin?|Grape|Plum|Cherry|Fig\nWhat kind of food is cheddar?|Cheese|Bread|Fish|Sausage\nWhat fruit is dried to make a prune?|Plum|Grape|Date|Apricot\nWhat is the yellow part of an egg called?|Yolk|White|Shell|Albumen\nWhich food is a popular Mexican dish in a folded tortilla?|Taco|Croissant|Sushi roll|Pierogi\nWhat is the main ingredient in French fries?|Potato|Carrot|Squash|Turnip\nWhich drink is made from roasted beans?|Coffee|Lemonade|Milk|Orange juice\nWhich fruit is yellow, curved and peeled?|Banana|Lemon|Mango|Pear\nWhich tropical fruit has a spiky top and is used on Hawaiian pizza?|Pineapple|Coconut|Papaya|Mango\nMaple syrup comes from which part of the maple tree?|Sap|Leaves|Bark|Seeds\nWhat is the main ingredient in a traditional omelet?|Eggs|Cheese|Rice|Flour\nWhich country is famous for croissants?|France|Italy|Germany|Japan\nWhat do bees make?|Honey|Butter|Syrup|Jam\nWhat vegetable do you cry when chopping?|Onion|Lettuce|Pepper|Zucchini\nWhich berry is famous in Thanksgiving sauce?|Cranberry|Blueberry|Raspberry|Blackberry\nWhich pasta is shaped like little bow ties?|Farfalle|Penne|Spaghetti|Rigatoni\nWhat kind of food is a bagel?|Bread|Cake|Cheese|Soup\nWhat gives bread dough its rise?|Yeast|Salt|Sugar only|Butter\n#Words\nWhat is the opposite of \"ancient\"?|Modern|Old|Antique|Historic\nWhich word is a synonym for \"happy\"?|Joyful|Gloomy|Angry|Tired\nHow many letters are in the English alphabet?|26|24|28|30\nWhat is a word that sounds like another but has a different meaning called?|Homophone|Antonym|Synonym|Acronym\nWhat do you call a word that means the opposite of another word?|Antonym|Synonym|Homophone|Pronoun\nWhich of these is a noun?|Seashell|Quickly|Swim|Blue\nWhat punctuation mark ends a question?|Question mark|Period|Comma|Colon\nWhat is the plural of \"mouse\" (the animal)?|Mice|Mouses|Meese|Mousen\nWhat is the plural of \"goose\"?|Geese|Gooses|Goosen|Geeses\nWhat does \"nocturnal\" mean?|Active at night|Active by day|Living in water|Eating plants\nWhich word is spelled correctly?|Necessary|Neccessary|Necesary|Neccesary\nWhat is a palindrome?|A word that reads the same backward|A very long word|A rhyming word|A made-up word\nWhich of these words is a palindrome?|Racecar|Rocket|Rabbit|Riddle\nWhat is the name for a word formed from initials, like NASA?|Acronym|Anagram|Antonym|Alias\n\"Listen\" and \"silent\" use the same letters. They are...|Anagrams|Synonyms|Homophones|Antonyms\nWhich word describes a group of words that expresses a complete thought?|Sentence|Syllable|Paragraph only|Letter\nWhat is the past tense of \"swim\"?|Swam|Swimmed|Swum only|Swimming\nHow many syllables are in the word \"banana\"?|Three|Two|Four|One\nWhich word is an adjective?|Sandy|Run|Ocean|Happily\n\"Bark\" can mean a dog's sound or...|A tree's outer layer|A fish fin|A cloud|A shoe\nWhat does \"enormous\" mean?|Very big|Very small|Very fast|Very loud\nWhich word rhymes with \"tide\"?|Ride|Tight|Tie|Tidy\nWhat do we call a story about a person's life written by that person?|Autobiography|Biography|Fable|Myth\nA short story with talking animals and a lesson is a...|Fable|Sonnet|Biography|Limerick\nWhich language has the most native speakers in the world?|Mandarin Chinese|English|Spanish|Hindi\nWhat is the main language spoken in Brazil?|Portuguese|Spanish|Brazilian|French\n\"Bonjour\" means hello in which language?|French|Spanish|Italian|German\n\"Hola\" means hello in which language?|Spanish|Portuguese|Italian|French\nWhat does \"aquatic\" describe?|Living in water|Living in trees|Living underground|Living in deserts\nWhat is the longest word in this list?|Seashore|Sea|Shore|Sand\n#Music & Art\nHow many keys are on a standard piano?|88|76|61|100\nWho painted the Mona Lisa?|Leonardo da Vinci|Michelangelo|Vincent van Gogh|Pablo Picasso\nWhich instrument has 6 strings in its most common form?|Guitar|Violin|Harp|Cello\nWhat are the three primary colors in classic paint mixing?|Red, yellow, blue|Red, green, blue|Orange, purple, green|Black, white, gray\nWhich famous artist cut off part of his own ear?|Vincent van Gogh|Claude Monet|Salvador Dalí|Rembrandt\nWho painted the ceiling of the Sistine Chapel?|Michelangelo|Raphael|Leonardo da Vinci|Donatello\nHow many players are in a quartet?|Four|Three|Five|Two\nWhich instrument is the largest in the string family usually played in orchestras?|Double bass|Violin|Viola|Cello\nWhat do you call a song sung by one person alone?|Solo|Duet|Chorus|Trio\nWhich composer kept writing music even after losing his hearing?|Ludwig van Beethoven|Wolfgang Amadeus Mozart|Johann Sebastian Bach|Frédéric Chopin\nWhat instrument does a drummer play with sticks?|Drums|Flute|Piano|Tuba\nWhich brass instrument has a slide?|Trombone|Trumpet|Tuba|French horn\nWhat is the art of folding paper called?|Origami|Calligraphy|Mosaic|Batik\nWhat do you get when you mix red and white paint?|Pink|Purple|Orange|Brown\nWhat is a painting of a person called?|Portrait|Landscape|Still life|Mural\nWhat is a painting of fruit, flowers and objects called?|Still life|Portrait|Abstract|Sculpture\nA large painting on a wall is called a...|Mural|Collage|Sketch|Etching\nWhich singer is known as the \"King of Rock and Roll\"?|Elvis Presley|Michael Jackson|Chuck Berry|Little Richard\nWhich singer is known as the \"King of Pop\"?|Michael Jackson|Elvis Presley|Prince|Justin Bieber\nWhat is the name for a group of singers?|Choir|Band only|Orchestra|Quartet always\n#Wilmington & NC\nWhat is the capital of North Carolina?|Raleigh|Charlotte|Wilmington|Durham\nWhat famous battleship is a museum on the Cape Fear River in Wilmington?|USS North Carolina|USS Missouri|USS Arizona|USS Constitution\nWhich river flows past downtown Wilmington?|Cape Fear River|Neuse River|French Broad River|Yadkin River\nWhich basketball legend grew up in Wilmington, NC?|Michael Jordan|LeBron James|Magic Johnson|Kobe Bryant\nWhich Wilmington high school did Michael Jordan attend?|Emsley A. Laney High School|Hoggard High School|New Hanover High School|Ashley High School\nWhat spring festival in Wilmington celebrates a famous flowering shrub?|North Carolina Azalea Festival|Tulip Time|Cherry Blossom Festival|Rose Parade\nIn which county is Wilmington?|New Hanover County|Brunswick County|Pender County|Onslow County\nWhich beach town is just east of Wilmington across the Intracoastal Waterway?|Wrightsville Beach|Myrtle Beach|Virginia Beach|Nags Head\nWhat is the nickname of the University of North Carolina Wilmington's teams?|Seahawks|Pirates|Tar Heels|Wolfpack\nWhich meat-eating plant grows wild naturally only in the Carolinas, around Wilmington?|Venus flytrap|Corpse flower|Water lily|Prickly pear cactus\nWhich Civil War fort near Kure Beach protected the port of Wilmington?|Fort Fisher|Fort Sumter|Fort Macon|Fort Bragg\nWhich famous gardens in Wilmington are known for azaleas and a huge old oak tree?|Airlie Gardens|Biltmore Gardens|Longwood Gardens|Butchart Gardens\nWhich teen TV drama set in fictional \"Capeside\" was filmed in Wilmington?|Dawson's Creek|Gilmore Girls|The O.C.|Friends\nWhich TV drama set in fictional \"Tree Hill\" was filmed in Wilmington?|One Tree Hill|Gossip Girl|Smallville|Glee\nWhat is Wilmington's popular nickname, thanks to its harbor?|The Port City|The Queen City|The Bull City|The Windy City\nWhich historic downtown theater, opened in 1858, is a Wilmington landmark?|Thalian Hall|Ford's Theatre|The Fox Theatre|Carolina Theatre\nWhat waterway near Wilmington lets boats travel along the coast without going out to sea?|Intracoastal Waterway|Erie Canal|Panama Canal|Suez Canal\nWhich barrier island near Wilmington is a protected nature reserve reachable only by boat?|Masonboro Island|Bald Head Island|Ocracoke Island|Hatteras Island\nWhich beach town is south of Wilmington, between Carolina Beach and Fort Fisher?|Kure Beach|Topsail Beach|Emerald Isle|Ocean Isle Beach\nWhich island near Wilmington is reached by ferry from Southport and has no cars, mostly golf carts?|Bald Head Island|Masonboro Island|Figure Eight Island|Sunset Beach\nWhat is the North Carolina state bird?|Northern cardinal|Blue jay|Mockingbird|Robin\nWhat is the North Carolina state tree?|Pine (longleaf)|Oak|Maple|Dogwood\nWhat is the North Carolina state flower?|Dogwood|Azalea|Magnolia|Rose\nNorth Carolina's license plates have long said what famous phrase?|First in Flight|The Tar Heel State|Old North State|Land of Pines\nWhere did the Wright brothers make the first powered flight in 1903?|Near Kitty Hawk (Kill Devil Hills), NC|Dayton, Ohio|Wilmington, NC|Raleigh, NC\nWhich popular soft drink was invented in New Bern, North Carolina?|Pepsi-Cola|Coca-Cola|Dr Pepper|Sprite\nWhich doughnut company was founded in Winston-Salem in 1937?|Krispy Kreme|Dunkin'|Tim Hortons|Shipley\nWhich cherry soda comes from Salisbury, North Carolina?|Cheerwine|Dr Pepper|Big Red|Sun Drop\nWhat is the largest city in North Carolina?|Charlotte|Raleigh|Greensboro|Wilmington\nWhich mountain in North Carolina is the highest peak east of the Mississippi River?|Mount Mitchell|Grandfather Mountain|Clingmans Dome|Mount Washington\nWhich famous pirate's ship, Queen Anne's Revenge, wrecked near Beaufort Inlet, NC?|Blackbeard|Captain Kidd|Calico Jack|Anne Bonny\nWhich huge mansion in Asheville is the largest privately owned home in the U.S.?|Biltmore House|The Breakers|Hearst Castle|Graceland\nWhat chain of barrier islands lines much of North Carolina's coast?|Outer Banks|Florida Keys|Sea Islands|Thousand Islands\nWhich lighthouse on the Outer Banks is the tallest brick lighthouse in the U.S.?|Cape Hatteras Lighthouse|Bodie Island Lighthouse|Oak Island Lighthouse|Old Baldy\nWho was the first English child born in the Americas, on Roanoke Island in 1587?|Virginia Dare|Pocahontas|Ananias Dare|Sacagawea\nThe 1587 Roanoke settlement that vanished is known as the...|Lost Colony|Silent Town|Missing Fort|Ghost Harbor\nWhich NFL team plays in Charlotte?|Carolina Panthers|Charlotte Hornets|Carolina Hurricanes|Charlotte FC\nWhich NHL hockey team plays in Raleigh?|Carolina Hurricanes|Carolina Panthers|Charlotte Checkers|Raleigh Rams\nNorth Carolina residents are nicknamed what?|Tar Heels|Sooners|Buckeyes|Hoosiers\nHow many counties does North Carolina have?|100|50|67|88\nWhat is North Carolina's state motto in English?|To be, rather than to seem|In God we trust|Live free or die|First in flight\nWhich famous TV actor from Mount Airy, NC, played a sheriff of \"Mayberry\"?|Andy Griffith|Don Knotts|Ron Howard|Jim Nabors\nWhat is North Carolina's official state vegetable?|Sweet potato|Corn|Collard greens|Peanut\nWhat is North Carolina's official state beverage?|Milk|Sweet tea|Cheerwine|Orange juice\nWhich shell is North Carolina's official state shell?|Scotch bonnet|Conch|Sand dollar|Whelk\nWhich giant studio complex makes Wilmington a busy place for filming movies and TV?|Screen Gems Studios (EUE)|Paramount Pictures|Universal Studios|Pinewood Studios\nWhich Marvel movie starring Robert Downey Jr. filmed scenes in Wilmington?|Iron Man 3|Black Panther|Thor|Ant-Man\nIn what year did the Battleship North Carolina arrive in Wilmington as a memorial?|1961|1941|1981|2001\nWhich major hurricane made landfall near Wrightsville Beach in September 2018?|Hurricane Florence|Hurricane Katrina|Hurricane Sandy|Hurricane Hugo\nWhat do Wilmingtonians call the boardwalk-style path along the river downtown?|The Riverwalk|The Strand|The Promenade|The Pier\nWhich pier at Wrightsville Beach is famous for its fishing and the end-of-pier view?|Johnnie Mercer's Pier|Bogue Inlet Pier|Kure Beach Pier|Oak Island Pier\nWhich aquarium is located at Fort Fisher near Kure Beach?|North Carolina Aquarium at Fort Fisher|Georgia Aquarium|National Aquarium|Ripley's Aquarium\nWhat is the airport code for Wilmington International Airport?|ILM|WIL|WMN|NCW\nWhich state borders North Carolina along most of its southern edge?|South Carolina|Virginia|Tennessee|Kentucky\nWhich state borders North Carolina to the north?|Virginia|South Carolina|Tennessee|Kentucky\nWhich state borders North Carolina to the west?|Tennessee|Virginia|Kentucky|Alabama\nWhich ocean is North Carolina's coast on?|Atlantic|Pacific|Gulf of Mexico|Indian\nWhat is the area around Raleigh, Durham and Chapel Hill often called?|The Research Triangle|The Golden Triangle|The Piedmont Square|The Tar Circle\nWhich university in Chapel Hill is the oldest public university in the U.S. to hold classes?|UNC Chapel Hill|Duke University|NC State|Wake Forest\nWhich Durham university's teams are the Blue Devils?|Duke University|UNC Chapel Hill|NC State|Elon\nThe NC State University teams in Raleigh are known as the...|Wolfpack|Tar Heels|Blue Devils|Seahawks\nWhat is North Carolina's official state dog breed, a bear-hunting hound?|Plott Hound|Beagle|Bluetick Coonhound|Labrador Retriever\nWhich cape near Wilmington gave the river its name?|Cape Fear|Cape Hatteras|Cape Lookout|Cape Cod\nWhich historic house museum in downtown Wilmington was finished just before the Civil War in 1859?|Bellamy Mansion|Biltmore House|Tryon Palace|Orton House\nWhich old cotton building in downtown Wilmington is now shops and restaurants?|The Cotton Exchange|The Mill|Cotton Row|The Warehouse District";
+/* ================= Trivia Duel (buzz in, answer right; no repeats in a session) ================= */
+const TQ = (() => { const out = []; let cat = ''; for (const ln of TQ_RAW.split('\n')) { if (ln[0] === '#') { cat = ln.slice(1); continue; } const p = ln.split('|'); if (p.length === 5) out.push({ c: cat, q: p[0], a: p[1], w: p.slice(2) }); } return out; })();
+const TQ_USED = new Set();
+BR.trivia = { bank: TQ, used: TQ_USED, cats: [...new Set(TQ.map(q => q.c))] };
+function tqNext(topic, lastCat) {
+  const ok = i => topic !== 'nc' || TQ[i].c === 'Wilmington & NC'; let pool = TQ.map((q, i) => i).filter(i => ok(i) && !TQ_USED.has(i));
+  if (!pool.length) { for (const i of [...TQ_USED]) if (ok(i)) TQ_USED.delete(i); pool = TQ.map((q, i) => i).filter(ok); }
+  const fresh = pool.filter(i => TQ[i].c !== lastCat); const i = pick(fresh.length ? fresh : pool); TQ_USED.add(i); const Q = TQ[i]; const ans = shuffle([Q.a, ...Q.w]); return { i, c: Q.c, q: Q.q, ans, ok: ans.indexOf(Q.a) };
+}
+const TQ_AI = { easy: { acc: .5, t: [6, 10] }, medium: { acc: .7, t: [4, 7] }, hard: { acc: .88, t: [2.5, 5] } };
+class TriviaDuel {
+  constructor(s) {
+    this.s = s; this.t = 0; this.fx = []; this.total = +(s.opts.rounds || 10); this.topic = s.opts.topic || 'mix'; this.pts = [0, 0]; this.qn = 0; this.banner = null; this.fk = [0, 0];
+    this.local = s.mode === 'local'; this.next();
+  }
+  next() { this.qn++; this.q = tqNext(this.topic, this.q && this.q.c); this.phase = 'ask'; this.tt = 0; this.limit = 15; this.buzz = -1; this.locked = [false, false]; this.choice = -1; this.wrong = []; this.aiAt = [0, 1].map(s2 => this.aiTime(s2)); this.aiAns = -1; }
+  aiTime(s2) { const P = this.s.players[s2]; if (P.human) return 1e9; const d = TQ_AI[P.diff] || TQ_AI.medium; return rnd(d.t[0], d.t[1]) * (this.s.fast ? .02 : 1); }
+  humanTurn() { if (this.s.over || this.phase === 'reveal') return false; if (this.phase === 'answer') return this.s.players[this.buzz].human; return [0, 1].some(s2 => this.s.players[s2].human && !this.locked[s2]); }
+  resize(W, H) { this.W = W; this.H = H; }
+  lay() {
+    const W = this.W, H = this.H, top = BR.HUD_H + 8, side = W > H * 1.25, buzzH = this.local ? 84 : 0, qh = Math.min(170, (H - top) * (side ? .38 : .3));
+    const q = { x: 14, y: top, w: W - 28, h: qh }; const ay = top + qh + 12, ah = H - ay - 44 - buzzH; const out = [];
+    if (side) { const bw = (W - 28 - 12) / 2, bh = Math.max(46, Math.min(78, (ah - 12) / 2)); for (let i = 0; i < 4; i++) out.push({ x: 14 + (i % 2) * (bw + 12), y: ay + Math.floor(i / 2) * (bh + 12), w: bw, h: bh }); }
+    else { const bh = Math.max(46, Math.min(74, (ah - 30) / 4)); for (let i = 0; i < 4; i++) out.push({ x: 14, y: ay + i * (bh + 10), w: W - 28, h: bh }); }
+    const bz = this.local ? [{ x: 12, y: H - 44 - buzzH + 4, w: Math.min(220, W / 2 - 24), h: buzzH - 10 }, { x: W - 12 - Math.min(220, W / 2 - 24), y: H - 44 - buzzH + 4, w: Math.min(220, W / 2 - 24), h: buzzH - 10 }] : [];
+    return { q, ans: out, bz };
+  }
+  canAnswer(s2) { if (this.phase === 'answer') return this.buzz === s2; if (this.phase !== 'ask' || this.locked[s2]) return false; return !this.local || !this.s.players[1 - s2].human; }
+  doBuzz(s2) { if (this.phase !== 'ask' || this.locked[s2] || this.buzz >= 0) return false; this.buzz = s2; this.phase = 'answer'; this.at = 0; Snd.play('ding'); this.s.rumble(s2, 80, .5, .3); this.fk[s2] = 0; return true; }
+  answer(s2, i) {
+    if (this.s.over || !(this.phase === 'answer' && this.buzz === s2 || this.phase === 'ask' && !this.locked[s2])) return; if (this.wrong.includes(i)) return; const P = this.s.players;
+    if (i === this.q.ok) { this.pts[s2]++; this.choice = i; this.winner = s2; this.phase = 'reveal'; this.rt = 0; Snd.play('coin'); this.say((P[s2].human && this.s.mode === 'ai' ? 'CORRECT!' : P[s2].name.split(' ')[0].toUpperCase() + ' +1'), '#3cc9a4'); if (!P[s2].human || this.s.mode !== 'ai') this.s.quip(P[s2].human ? 'bad' : 'good', null, .3); return; }
+    this.wrong.push(i); this.locked[s2] = true; this.buzz = -1; Snd.play('error'); this.say('WRONG!', '#ff6f59', .7);
+    if (!this.locked[1 - s2]) { this.phase = 'ask'; { const k = this.s.fast ? .05 : 1; this.tt = this.limit * k - 8 * k; } this.aiAt[1 - s2] = this.tt + this.aiTime(1 - s2) * .45; } else { this.winner = -1; this.phase = 'reveal'; this.rt = 0; }
+  }
+  say(text, col, d) { this.banner = { text, col: col || '#ffd166', t: 0, d: this.s.fast ? .05 : (d || 1.2) }; }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < f.d); if (this.banner) { this.banner.t += dt; if (this.banner.t > this.banner.d) this.banner = null; }
+    if (this.s.over) return; const P = this.s.players, fast = this.s.fast;
+    if (this.phase === 'reveal') { this.rt += dt; if (this.rt >= (fast ? .05 : 2.2)) { if (this.qn >= this.total) { const [a, b] = this.pts; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Score ' + a + ' – ' + b + ' over ' + this.total + ' questions', best: this.s.mode === 'ai' ? this.pts[this.s.humanSeat] : Math.max(a, b) }); return; } this.next(); } return; }
+    if (this.phase === 'ask') {
+      this.tt += dt; if (this.tt >= this.limit * (fast ? .05 : 1) && !(fast && this.humanTurn())) { this.winner = -1; this.phase = 'reveal'; this.rt = 0; Snd.play('drop'); this.say('TIME!', '#ff8fab', .8); return; }
+      { const ready = [0, 1].filter(s2 => !P[s2].human && !this.locked[s2] && this.tt >= this.aiAt[s2]).sort((a, b) => this.aiAt[a] - this.aiAt[b]); if (ready.length && this.buzz < 0) { this.doBuzz(ready[0]); return; } }
+      if (this.local) { const pads = Input.connected(); const bz = [Input.keyHit('KeyQ', 'ShiftLeft') || (pads[0] && Input.hit(pads[0], 0)), Input.keyHit('KeyP', 'ShiftRight') || (pads[1] && Input.hit(pads[1], 0))]; for (const s2 of [0, 1]) if (bz[s2] && P[s2].human && this.doBuzz(s2)) return; }
+      else for (const s2 of [0, 1]) if (P[s2].human && !this.locked[s2]) this.navInput(s2);
+      return;
+    }
+    if (this.phase === 'answer') {
+      this.at += dt; const b = this.buzz;
+      if (!P[b].human) { if (this.at >= (fast ? .02 : .8)) { const d = TQ_AI[P[b].diff] || TQ_AI.medium; const opts = [0, 1, 2, 3].filter(i => !this.wrong.includes(i)); this.answer(b, Math.random() < d.acc ? this.q.ok : pick(opts.filter(i => i !== this.q.ok).length ? opts.filter(i => i !== this.q.ok) : opts)); } return; }
+      if (this.at >= (fast ? 30 : 8)) { this.answer(b, [0, 1, 2, 3].find(i => i !== this.q.ok && !this.wrong.includes(i)) ?? this.q.ok); BR.toast('Too slow!'); return; }
+      this.navInput(b);
+    }
+  }
+  navInput(s2) {
+    const ctrl = this.s.ctrl(s2), n = Input.nav(ctrl); for (let i = 0; i < 4; i++) if (ctrl.keys && Input.keyHit('Digit' + (i + 1), 'Numpad' + (i + 1))) { this.answer(s2, i); return; }
+    const side = this.W > this.H * 1.25; if (n.dy) this.fk[s2] = clamp(this.fk[s2] + (side ? n.dy * 2 : n.dy), 0, 3); if (n.dx && side) this.fk[s2] = clamp(this.fk[s2] + n.dx, 0, 3); if (n.dx || n.dy) Snd.play('move');
+    if (n.a) this.answer(s2, this.fk[s2]);
+  }
+  pointer(type, p) {
+    if (type !== 'down' || this.s.over || !this.W) return; const L = this.lay(), P = this.s.players, inR = r => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    if (this.local) { L.bz.forEach((r, s2) => { if (inR(r) && P[s2].human) this.doBuzz(s2); }); if (this.phase === 'answer' && P[this.buzz].human) L.ans.forEach((r, i) => { if (inR(r)) this.answer(this.buzz, i); }); else if (this.phase === 'ask' && L.ans.some(inR)) BR.toast('Buzz in first!'); return; }
+    const hs = [0, 1].find(s2 => P[s2].human); if (hs == null) return; if (this.phase === 'answer' && this.buzz !== hs) return; L.ans.forEach((r, i) => { if (inR(r)) this.answer(hs, i); });
+  }
+  hud() { return { score: this.pts, turn: this.phase === 'answer' ? this.buzz : -1, status: this.s.over ? 'Game over' : 'Question ' + this.qn + ' of ' + this.total + (this.phase === 'answer' ? ' · ' + this.s.players[this.buzz].name + ' buzzed in!' : '') }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); if (this.local && this.phase === 'ask') return L === 'pad' ? 'First to press Ⓐ buzzes in' : L === 'key' ? 'Buzz: Player 1 Q · Player 2 P' : 'Hit your buzzer first!'; return L === 'pad' ? 'D-pad picks · Ⓐ answers' : L === 'key' ? 'Keys 1-4, or arrows + Enter' : 'Tap your answer'; }
+  wrap(c, txt, maxW) { const lines = []; let ln = ''; for (const w of txt.split(' ')) { if (c.measureText(ln + w).width > maxW && ln) { lines.push(ln.trim()); ln = ''; } ln += w + ' '; } lines.push(ln.trim()); return lines; }
+  draw(c, W, H) {
+    if (this.W !== W || this.H !== H) this.resize(W, H); BR.tableBG(c, W, H, '#1d9bb5', '#12355b'); const L = this.lay(), q = this.q, P = this.s.players;
+    c.fillStyle = '#fffaf0'; rrect(c, L.q.x, L.q.y, L.q.w, L.q.h, 18); c.fill(); c.fillStyle = '#ff6f59'; const cw = Math.min(L.q.w - 20, c.measureText ? 260 : 260); rrect(c, L.q.x + 12, L.q.y + 10, Math.min(cw, 30 + q.c.length * 9), 26, 13); c.fill(); CD.label(c, q.c, L.q.x + 26, L.q.y + 23, 13, '#fff', 'left');
+    const lim = this.limit * (this.s.fast ? .05 : 1), k = this.phase === 'ask' ? clamp(1 - this.tt / lim, 0, 1) : this.phase === 'answer' ? clamp(1 - this.at / 8, 0, 1) : 0; c.fillStyle = 'rgba(0,0,0,.1)'; rrect(c, L.q.x + 12, L.q.y + L.q.h - 14, L.q.w - 24, 6, 3); c.fill(); c.fillStyle = k > .3 ? '#3cc9a4' : '#ff6f59'; rrect(c, L.q.x + 12, L.q.y + L.q.h - 14, (L.q.w - 24) * k, 6, 3); c.fill();
+    let fs = Math.round(Math.min(26, W / 18)); c.font = '800 ' + fs + 'px ui-rounded,system-ui,sans-serif'; let lines = this.wrap(c, q.q, L.q.w - 36); while (lines.length * fs * 1.25 > L.q.h - 56 && fs > 13) { fs--; c.font = '800 ' + fs + 'px ui-rounded,system-ui,sans-serif'; lines = this.wrap(c, q.q, L.q.w - 36); }
+    c.fillStyle = '#12355b'; c.textAlign = 'center'; c.textBaseline = 'middle'; const y0 = L.q.y + 40 + (L.q.h - 56 - lines.length * fs * 1.25) / 2 + fs * .6; lines.forEach((ln, i) => c.fillText(ln, W / 2, y0 + i * fs * 1.25));
+    const fs2 = this.phase === 'answer' ? this.buzz : [0, 1].find(s2 => P[s2].human && !this.locked[s2]); const showF = BR.showCursor() && this.humanTurn() && fs2 != null && P[fs2] && P[fs2].human && (!this.local || this.phase === 'answer');
+    L.ans.forEach((r, i) => {
+      const rev = this.phase === 'reveal', ok = i === q.ok, wr = this.wrong.includes(i); let col = '#fffaf0', tc = '#12355b'; if (rev && ok) { col = '#3cc9a4'; tc = '#fff'; } else if (wr) { col = '#ff8fab'; tc = '#fff'; } else if (this.local && this.phase === 'ask') col = '#e6eef3';
+      c.fillStyle = 'rgba(0,0,0,.25)'; rrect(c, r.x, r.y + 4, r.w, r.h, 14); c.fill(); c.fillStyle = col; rrect(c, r.x, r.y, r.w, r.h, 14); c.fill();
+      c.fillStyle = ['#ff6f59', '#1d9bb5', '#f2b33a', '#8a5cd6'][i]; c.beginPath(); c.arc(r.x + 26, r.y + r.h / 2, Math.min(16, r.h * .3), 0, TAU); c.fill(); CD.label(c, String(i + 1), r.x + 26, r.y + r.h / 2, 14, '#fff');
+      let f2 = Math.round(Math.min(22, r.h * .36)); c.font = '800 ' + f2 + 'px ui-rounded,system-ui,sans-serif'; while (c.measureText(q.ans[i]).width > r.w - 64 && f2 > 11) { f2--; c.font = '800 ' + f2 + 'px ui-rounded,system-ui,sans-serif'; } c.fillStyle = tc; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(q.ans[i], r.x + 50, r.y + r.h / 2 + 1);
+      if (showF && this.fk[fs2] === i) BR.drawCursor(c, r.x - 4, r.y - 4, r.w + 8, r.h + 8, this.t);
+    });
+    if (this.local) L.bz.forEach((r, s2) => { const on = this.phase === 'ask' && !this.locked[s2], me = this.buzz === s2; c.fillStyle = 'rgba(0,0,0,.3)'; rrect(c, r.x, r.y + 5, r.w, r.h, r.h / 2); c.fill(); c.fillStyle = me ? '#ffd166' : on ? BR.PCOL[s2] : '#7d8a96'; rrect(c, r.x, r.y, r.w, r.h, r.h / 2); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 3; c.stroke(); CD.label(c, me ? 'ANSWER!' : this.locked[s2] ? 'locked out' : 'BUZZ ' + P[s2].name.split(' ')[0], r.x + r.w / 2, r.y + r.h / 2, Math.min(20, r.w / 9), '#fff'); });
+    if (this.phase === 'answer' && !P[this.buzz].human) CD.label(c, P[this.buzz].name + ' buzzed in…', W / 2, L.q.y + L.q.h + 2, 13, '#ffd166');
+    const b = this.banner; if (b) { c.save(); c.globalAlpha = Math.max(0, Math.min(1, (b.d - b.t) * 4)); c.font = '900 ' + Math.round(Math.min(W * .08, 50)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineWidth = 8; c.strokeStyle = '#12355b'; c.strokeText(b.text, W / 2, H * .52); c.fillStyle = b.col; c.fillText(b.text, W / 2, H * .52); c.restore(); }
+  }
+  destroy() { }
+  testInfo() {
+    const human = this.humanTurn(), P = this.s.players; let clicks = null;
+    if (human && this.W) { const L = this.lay(), cen = r => [r.x + r.w / 2, r.y + r.h / 2], pickA = () => { const opts = [0, 1, 2, 3].filter(i => !this.wrong.includes(i)); return Math.random() < .6 && !this.wrong.includes(this.q.ok) ? this.q.ok : pick(opts); };
+      if (this.local) { if (this.phase === 'ask') { const ss = [0, 1].filter(s2 => P[s2].human && !this.locked[s2]); const s2 = pick(ss); clicks = [cen(L.bz[s2]), cen(L.ans[pickA()])]; } else if (this.phase === 'answer') clicks = [cen(L.ans[pickA()])]; }
+      else clicks = [cen(L.ans[pickA()])]; }
+    return { over: this.s.over, human, phase: this.phase, qn: this.qn, q: this.q.i, clicks, pts: this.pts.slice() };
+  }
+}
+BR.registerGame({
+  id: 'trivia', name: 'Trivia Duel', tag: 'Buzz in first and answer right. ' + TQ.length + ' questions, no repeats.', color: '#1d9bb5', wave: 5,
+  options: [{ id: 'rounds', label: 'Questions', choices: [[10, '10'], [15, '15'], [20, '20']], def: 0 }, { id: 'topic', label: 'Topics', choices: [['mix', 'Everything mixed'], ['nc', 'Wilmington & NC only']], def: 0 }],
+  localNote: 'Head-to-head on one screen: each player has a buzzer. First to buzz answers; a wrong answer lets the rival steal.',
+  howTo: ['Each round shows a question and four answers, from ' + BR.trivia.cats.length + ' categories: ' + BR.trivia.cats.join(', ') + '.', 'Against a character: just pick your answer before they buzz in. Two players: hit your buzzer first, then answer.', 'Right answer: +1. Wrong answer: you are locked out and your rival can steal. If time runs out, nobody scores.', 'Questions never repeat until the whole bank (' + TQ.length + ' questions) has been used in this visit. Most points after the last question wins.'],
+  controls: { pad: 'D-pad picks an answer, A answers. Two pads: press A to buzz in.', key: 'Keys 1 to 4 answer (or arrows + Enter). Two players buzz with Q (Player 1) and P (Player 2).', touch: 'Tap an answer. Two players: tap your buzzer first.' },
+  icon(c, x, y, s) { c.fillStyle = '#fffaf0'; rrect(c, x - s * .7, y - s * .55, s * 1.4, s * 1.1, 10); c.fill(); c.fillStyle = '#1d9bb5'; c.font = '900 ' + Math.round(s * .9) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('?', x, y + 2); },
+  create: s => new TriviaDuel(s)
+});
+/* ================= Poker: Texas Hold'em, heads-up or up to 4 with AI rivals ================= */
+const PK_HN = ['High card', 'Pair', 'Two pair', 'Three of a kind', 'Straight', 'Flush', 'Full house', 'Four of a kind', 'Straight flush'];
+const pkR = c => c.r === 1 ? 14 : c.r;
+/* best 5 of up to 7 cards -> comparable number */
+function pkEval(cards) {
+  const cnt = Array(15).fill(0), suits = [[], [], [], []]; for (const c of cards) { const r = pkR(c); cnt[r]++; suits[c.s].push(r); }
+  const straight = rs => { const has = Array(15).fill(false); for (const r of rs) { has[r] = true; if (r === 14) has[1] = true; } for (let top = 14; top >= 5; top--) { let ok = true; for (let k = 0; k < 5; k++) if (!has[top - k]) { ok = false; break; } if (ok) return top; } return 0; };
+  const V = (cat, ks) => { let v = cat; for (let i = 0; i < 5; i++) v = v * 15 + (ks[i] || 0); return v; };
+  for (const su of suits) if (su.length >= 5) { const sf = straight(su); if (sf) return V(8, [sf]); }
+  const byC = []; for (let r = 14; r >= 2; r--) if (cnt[r]) byC.push([cnt[r], r]); byC.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
+  const ranks = []; for (let r = 14; r >= 2; r--) for (let k = 0; k < cnt[r]; k++) ranks.push(r);
+  if (byC[0][0] === 4) return V(7, [byC[0][1], ranks.find(r => r !== byC[0][1])]);
+  if (byC[0][0] === 3 && byC[1] && byC[1][0] >= 2) return V(6, [byC[0][1], byC[1][1]]);
+  for (const su of suits) if (su.length >= 5) return V(5, su.slice().sort((a, b) => b - a).slice(0, 5));
+  const st = straight(ranks); if (st) return V(4, [st]);
+  if (byC[0][0] === 3) return V(3, [byC[0][1], ...ranks.filter(r => r !== byC[0][1]).slice(0, 2)]);
+  if (byC[0][0] === 2 && byC[1] && byC[1][0] === 2) return V(2, [byC[0][1], byC[1][1], ranks.find(r => r !== byC[0][1] && r !== byC[1][1])]);
+  if (byC[0][0] === 2) return V(1, [byC[0][1], ...ranks.filter(r => r !== byC[0][1]).slice(0, 3)]);
+  return V(0, ranks.slice(0, 5));
+}
+const pkCat = v => Math.floor(v / Math.pow(15, 5));
+const PK_COL = ['#ff6f59', '#1d9bb5', '#f2b33a', '#8a5cd6'];
+class Poker extends PickGame {
+  constructor(s) {
+    super(s); const n = +(s.opts.players || 2); this.n = n; this.hidden = s.mode === 'local'; this.coverText = 'Your cards stay face down'; this.coverBtn = 'show my cards'; this.maxH = +(s.opts.hands || 20);
+    const used = new Set(s.players.map(p => p.char).filter(Boolean)), pool = BR.CHARS.filter(c => !used.has(c.id)), fd = s.mode === 'local' ? (s.diff || 'medium') : (s.players.find(p => !p.human) || {}).diff || s.diff || 'medium';
+    this.pl = [s.players[0], s.players[1]]; for (let i = 2; i < n; i++) { const ch = pool[(i - 2) % pool.length]; this.pl.push({ human: false, char: ch.id, name: ch.name, face: ch.id, diff: fd, filler: true }); }
+    this.k.isHuman = seat => seat < 2 && !!s.players[seat].human;
+    const chips = 200; this.st = { chips: Array(n).fill(chips), hole: [], board: [], deck: [], contrib: [], bet: [], folded: [], allin: [], acted: [], dealer: n - 1, turn: 0, street: 0, cur: 0, minR: 4, handNo: 0, sb: 2, bb: 4, phase: 'deal', show: false, last: Array(n).fill('') };
+    this.log = ''; this.newHand();
+  }
+  seat() { return this.st.turn; }
+  checkHandoff() { const st = this.st; if (st.turn >= 2 || st.phase !== 'bet') return; super.checkHandoff(); }
+  inHand(i) { const st = this.st; return st.hole[i] && st.hole[i].length && !st.folded[i]; }
+  canAct(i) { const st = this.st; return this.inHand(i) && !st.allin[i]; }
+  nextFrom(i, f) { const n = this.n; for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (f(j)) return j; } return -1; }
+  newHand() {
+    const st = this.st, n = this.n; st.handNo++; if (st.handNo > 1 && (st.handNo - 1) % 8 === 0) { st.sb = Math.round(st.sb * 1.5); st.bb = st.sb * 2; BR.toast('Blinds up: ' + st.sb + ' / ' + st.bb); }
+    st.deck = CD.deck(); st.board = []; st.contrib = Array(n).fill(0); st.bet = Array(n).fill(0); st.folded = Array(n).fill(false); st.allin = Array(n).fill(false); st.acted = Array(n).fill(false); st.last = Array(n).fill(''); st.show = false; st.street = 0; this.revealAll = false;
+    st.hole = st.chips.map(c => c > 0 ? [] : null); st.dealer = this.nextFrom(st.dealer, j => st.chips[j] > 0);
+    const live = st.chips.filter(c => c > 0).length, heads = live === 2;
+    const sbS = heads ? st.dealer : this.nextFrom(st.dealer, j => st.chips[j] > 0), bbS = this.nextFrom(sbS, j => st.chips[j] > 0);
+    for (let r = 0; r < 2; r++) for (let i = 0; i < n; i++) { const j = (st.dealer + 1 + i) % n; if (st.hole[j]) st.hole[j].push(st.deck.pop()); }
+    this.post(sbS, st.sb); this.post(bbS, st.bb); st.cur = st.bb; st.minR = st.bb; st.last[sbS] = 'small blind'; st.last[bbS] = 'big blind';
+    st.turn = this.nextFrom(bbS, j => this.canAct(j)); st.phase = 'bet'; this.shown = -1; Snd.play('clack');
+    this.log = 'Hand ' + st.handNo + ' · blinds ' + st.sb + '/' + st.bb; if (st.turn < 0) this.runOut();
+  }
+  post(i, amt) { const st = this.st, a = Math.min(amt, st.chips[i]); st.chips[i] -= a; st.bet[i] += a; st.contrib[i] += a; if (!st.chips[i]) st.allin[i] = true; }
+  pot() { return this.st.contrib.reduce((a, b) => a + b, 0); }
+  toCall(i) { const st = this.st; return Math.min(st.cur - st.bet[i], st.chips[i]); }
+  raiseOpts(i) {
+    const st = this.st, maxTo = st.bet[i] + st.chips[i], minTo = st.cur + st.minR, out = [];
+    if (maxTo <= st.cur) return out; const potTo = st.cur + this.pot() + (st.cur - st.bet[i]);
+    if (minTo < maxTo) out.push({ to: minTo, lab: (st.cur ? 'Raise ' : 'Bet ') + minTo });
+    if (potTo > minTo && potTo < maxTo) out.push({ to: potTo, lab: 'Pot ' + potTo });
+    out.push({ to: maxTo, lab: 'All-in ' + maxTo }); return out;
+  }
+  act(i, m) {
+    const st = this.st, P = this.pl[i], nm = P.name.split(' ')[0];
+    if (m.fold) { st.folded[i] = true; st.last[i] = 'fold'; Snd.play('back'); this.log = nm + ' folds'; }
+    else if (m.call) { const c = this.toCall(i); this.post(i, c); st.last[i] = c ? (st.allin[i] ? 'all-in' : 'call ' + c) : 'check'; Snd.play(c ? 'coin' : 'click'); this.log = nm + ' ' + st.last[i]; }
+    else if (m.to) { const to = Math.min(m.to, st.bet[i] + st.chips[i]); const raise = to - st.cur; if (raise >= st.minR) { st.minR = raise; } if (to > st.cur) { st.cur = to; st.acted = st.acted.map(() => false); } this.post(i, to - st.bet[i]); st.last[i] = st.allin[i] ? 'all-in ' + st.bet[i] : (st.street || st.cur > st.bb ? 'raise to ' : 'bet ') + to; Snd.play('coin'); this.log = nm + ' ' + st.last[i]; this.s.rumble(i, 60, .3, .2); }
+    st.acted[i] = true; this.advance();
+  }
+  advance() {
+    const st = this.st, live = [...Array(this.n).keys()].filter(j => this.inHand(j));
+    if (live.length === 1) { this.award([[this.pot(), live]], true); return; }
+    const pending = live.filter(j => !st.allin[j] && (!st.acted[j] || st.bet[j] < st.cur));
+    if (pending.length) { st.turn = this.nextFrom(st.turn, j => pending.includes(j)); return; }
+    const canBet = live.filter(j => !st.allin[j]); if (st.street === 3) { this.showdown(); return; }
+    if (canBet.length <= 1) { this.runOut(); return; }
+    this.nextStreet();
+  }
+  nextStreet() {
+    const st = this.st; st.street++; const k = st.street === 1 ? 3 : 1; for (let i = 0; i < k; i++) st.board.push(st.deck.pop()); st.bet = st.bet.map(() => 0); st.cur = 0; st.minR = st.bb; st.acted = st.acted.map(() => false); st.last = st.last.map((l, j) => this.inHand(j) ? (st.allin[j] ? 'all-in' : '') : st.last[j]);
+    Snd.play('place'); this.log = ['', 'The flop', 'The turn', 'The river'][st.street]; st.turn = this.nextFrom(st.dealer, j => this.canAct(j)); this.anim = { t: 0, d: .5 };
+  }
+  runOut() { const st = this.st; st.show = true; this.revealAll = true; const step = () => { if (st.board.length >= 5) { this.showdown(); return; } st.board.push(st.deck.pop()); Snd.play('place'); this.anim = { t: 0, d: .7, done: step }; }; this.anim = { t: 0, d: .6, done: step }; st.phase = 'runout'; }
+  showdown() {
+    const st = this.st, n = this.n; st.show = true; this.revealAll = true; const live = [...Array(n).keys()].filter(j => this.inHand(j)); const val = {}; for (const j of live) val[j] = pkEval(st.hole[j].concat(st.board));
+    const levels = [...new Set(live.map(j => st.contrib[j]))].sort((a, b) => a - b); const pots = []; let prev = 0;
+    levels.forEach((L, li) => { let amt = 0; for (let j = 0; j < n; j++) amt += Math.max(0, Math.min(st.contrib[j], L) - prev); if (li === levels.length - 1) for (let j = 0; j < n; j++) amt += Math.max(0, st.contrib[j] - L); const elig = live.filter(j => st.contrib[j] >= L); const best = Math.max(...elig.map(j => val[j])); pots.push([amt, elig.filter(j => val[j] === best)]); prev = L; });
+    this.handNames = val; this.award(pots, false);
+  }
+  award(pots, uncontested) {
+    const st = this.st, P = this.pl, msg = []; st.phase = 'payout';
+    for (const [amt, ws] of pots) { if (!amt) continue; const share = Math.floor(amt / ws.length); let rem = amt - share * ws.length; for (const w of ws) { st.chips[w] += share + (rem > 0 ? 1 : 0); rem--; } msg.push(ws.map(w => P[w].name.split(' ')[0]).join(' & ') + ' win' + (ws.length > 1 ? '' : 's') + ' ' + amt + (uncontested ? '' : ' with ' + PK_HN[pkCat(this.handNames[ws[0]])].toLowerCase())); }
+    st.contrib = st.contrib.map(() => 0); st.bet = st.bet.map(() => 0); this.log = msg.join(' · '); const w0 = pots[0][1][0]; this.say(uncontested ? P[w0].name.split(' ')[0].toUpperCase() + ' TAKES IT' : PK_HN[pkCat(this.handNames[w0])].toUpperCase() + '!', '#ffd166', 1.6); Snd.play('coin');
+    if (pots[0][1].some(w => w < 2) && !uncontested) this.s.quip(pots[0][1].includes(0) || pots[0][1].includes(1) ? (P[pots[0][1][0]].human ? 'bad' : 'good') : 'good', null, .4);
+    this.anim = { t: 0, d: uncontested ? 1.6 : 3, done: () => {
+      const [a, b] = st.chips; if (a <= 0 || b <= 0 || st.handNo >= this.maxH) { const w = a > b ? 0 : b > a ? 1 : -1; this.s.end(w, { detail: (a <= 0 || b <= 0 ? (a <= 0 ? P[0].name : P[1].name) + ' is out of chips' : 'After ' + st.handNo + ' hands') + ' · chips ' + a + ' – ' + b, best: this.s.mode === 'ai' ? st.chips[this.s.humanSeat] : Math.max(a, b) }); return; }
+      if (st.chips.filter(c => c > 0).length < 2) { this.s.end(a > b ? 0 : 1, { detail: 'chips ' + a + ' – ' + b }); return; } this.newHand(); } };
+  }
+  /* --------- AI --------- */
+  equity(i, sims) {
+    const st = this.st, opp = [...Array(this.n).keys()].filter(j => j !== i && this.inHand(j)).length; if (!opp) return 1; const known = st.hole[i].concat(st.board), ids = new Set(known.map(c => c.s * 13 + c.r)), deck = []; for (let s2 = 0; s2 < 4; s2++) for (let r = 1; r <= 13; r++) if (!ids.has(s2 * 13 + r)) deck.push({ r, s: s2 });
+    let win = 0; for (let k = 0; k < sims; k++) { for (let j = deck.length - 1; j > deck.length - 1 - (5 - st.board.length + opp * 2); j--) { const x = ri(j + 1); [deck[j], deck[x]] = [deck[x], deck[j]]; } let p = deck.length - 1; const board = st.board.slice(); while (board.length < 5) board.push(deck[p--]); const me = pkEval(st.hole[i].concat(board)); let best = true, tie = 0; for (let o = 0; o < opp; o++) { const v = pkEval([deck[p--], deck[p--]].concat(board)); if (v > me) { best = false; break; } if (v === me) tie++; } if (best) win += tie ? 1 / (tie + 1) : 1; }
+    return win / sims;
+  }
+  aiPick(seat, diff) {
+    const st = this.st; if (st.phase !== 'bet' || st.turn !== seat) return null; const call = this.toCall(seat), pot = this.pot(), ro = this.raiseOpts(seat), odds = call / (pot + call || 1);
+    if (diff === 'easy') { const r = Math.random(); const h = st.hole[seat], pre = (pkR(h[0]) + pkR(h[1])) / 28 + (h[0].r === h[1].r ? .25 : 0); if (call > st.chips[seat] * .4 && pre < .7 && r < .6) return { fold: 1 }; if (r < .12 && ro.length) return { to: ro[0].to }; if (call && r < .15 + (1 - pre) * .2) return { fold: 1 }; return { call: 1 }; }
+    const eq = this.equity(seat, this.s.fast ? 60 : diff === 'hard' ? 500 : 180), opp = [...Array(this.n).keys()].filter(j => j !== seat && this.inHand(j)).length, fair = 1 / (opp + 1);
+    const strong = eq > Math.min(.85, fair * 1.7 + .08), good = eq > fair * 1.15, bluff = diff === 'hard' && !call && Math.random() < .12;
+    if ((strong || bluff) && ro.length) { const o = strong && eq > .8 && Math.random() < .5 ? ro[ro.length - 1] : ro[Math.min(ro.length - 1, strong && Math.random() < .5 ? 1 : 0)]; if (o.to - st.bet[seat] <= st.chips[seat] * (strong ? 1 : .3)) return { to: o.to }; }
+    if (!call) return { call: 1 }; if (eq >= odds * (diff === 'hard' ? 1.05 : .9) || good) return { call: 1 }; return { fold: 1 };
+  }
+  update(dt) {
+    if (this.banner) { this.banner.t += dt; if (this.banner.t > (this.banner.d || 1.6)) this.banner = null; }
+    for (const f of this.fly) f.t += dt / (this.s.fast ? .02 : f.d); this.fly = this.fly.filter(f => f.t < 1);
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < (f.d || 1));
+    if (this.anim) { this.anim.t += dt / (this.s.fast ? .02 : this.anim.d); if (this.anim.t >= 1) { const a = this.anim; this.anim = null; if (a.done) a.done(); } return; }
+    if (this.s.over || this.st.phase !== 'bet') return; this.checkHandoff(); if (this.blocked) return; const seat = this.st.turn;
+    if (this.k.isHuman(seat)) this.humanInput(this.k.nav(seat), seat);
+    else if (!this.k.thinking) this.k.ai(() => this.aiPick(seat, this.pl[seat].diff), m => { if (m && this.st.phase === 'bet' && this.st.turn === seat) this.act(seat, m); }, this.pl[seat].filler ? 500 : 700);
+  }
+  humanTurn() { return !this.s.over && !this.anim && !this.blocked && this.st.phase === 'bet' && this.k.isHuman(this.st.turn); }
+  commit(m) { if (this.humanTurn()) this.act(this.st.turn, m); }
+  /* --------- layout --------- */
+  resize(W, H) { this.W = W; this.H = H; }
+  L() {
+    const W = this.W, H = this.H, top = BR.HUD_H + 6; const { cw, ch } = CD.size(W, H, 10); const c2 = Math.round(Math.min(cw, (H - top - 120) / 3.9 / 1.42, W / 9)), h2 = Math.round(c2 * 1.42);
+    const vs = this.viewSeat() < 0 ? 0 : (this.viewSeat() >= this.n ? 0 : this.viewSeat()), side = W > H * 1.2; const by = H - h2 - 50 - (side ? 0 : 62);
+    const posFor = rel => { const n = this.n; const slots = n === 2 ? ['b', 't'] : n === 3 ? ['b', 'tl', 'tr'] : ['b', 'l', 't', 'r']; return slots[rel]; };
+    const xy = { b: [W / 2, by], t: [W / 2, top + 4], tl: [W * .28, top + 4], tr: [W * .72, top + 4], l: [c2 * 1.25 + 10, (top + by) / 2 - h2 * .3], r: [W - c2 * 1.25 - 10, (top + by) / 2 - h2 * .3] };
+    const seats = []; for (let i = 0; i < this.n; i++) seats[i] = xy[posFor((i - vs + this.n) % this.n)];
+    const midY = (top + h2 + 28 + by) / 2 - h2 / 2; return { cw: c2, ch: h2, seats, vs, side, by, boardY: midY, top };
+  }
+  targets() {
+    if (!this.W || !this.humanTurn()) return []; const st = this.st, i = st.turn, L = this.L(), out = [], call = this.toCall(i);
+    const acts = [{ id: 'fold', lab: 'Fold', mv: { fold: 1 }, legal: call > 0, why: 'Nothing to call: check for free' }, { id: 'call', lab: call ? (call >= st.chips[i] ? 'All-in ' + call : 'Call ' + call) : 'Check', mv: { call: 1 }, def: true }];
+    this.raiseOpts(i).forEach((o, k) => { if (call >= st.chips[i]) return; acts.push({ id: 'r' + k, lab: o.lab, mv: { to: o.to } }); });
+    const W = this.W, side = L.side; let bw, x0, y; if (side) { bw = Math.min(150, (W / 2 - L.cw * 1.4 - 30) / 2 - 6); const cols = 2, rows = Math.ceil(acts.length / cols); x0 = W / 2 + L.cw * 1.4 + 10; y = L.by + L.ch / 2 - rows * 29; acts.forEach((a, k) => out.push(Object.assign(a, { x: x0 + (k % cols) * (bw + 8), y: y + Math.floor(k / cols) * 58, w: bw, h: 50, r: Math.floor(k / cols) }))); }
+    else { bw = Math.min(140, (W - 20) / acts.length - 6); x0 = W / 2 - (acts.length * (bw + 6) - 6) / 2; y = this.H - 44 - 58; acts.forEach((a, k) => out.push(Object.assign(a, { x: x0 + k * (bw + 6), y, w: bw, h: 52, r: 0 }))); }
+    return out;
+  }
+  hud() { const st = this.st; return { score: [st.chips[0], st.chips[1]], turn: this.s.over || st.turn >= 2 || st.phase !== 'bet' ? -1 : st.turn, status: this.s.over ? 'Game over' : st.phase !== 'bet' ? this.log : st.turn >= 2 ? this.pl[st.turn].name + ' is thinking…' : this.status(this.toCall(st.turn) ? this.toCall(st.turn) + ' to call' : 'check or bet') + ' · hand ' + st.handNo + '/' + this.maxH }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? '◀ ▶ choose · Ⓐ act' : L === 'key' ? '← → choose · Enter act' : 'Tap Fold, Call/Check or a raise'; }
+  draw(c, W, H) {
+    if (this.W !== W || this.H !== H) this.resize(W, H); CD.felt(c, W, H); const st = this.st, L = this.L(), P = this.pl, f = this.humanTurn() ? this.focused() : null;
+    c.save(); c.fillStyle = 'rgba(0,0,0,.15)'; c.beginPath(); c.ellipse(W / 2, L.boardY + L.ch / 2, Math.min(W * .44, 420), Math.min(L.ch * 1.6, (L.by - L.top) * .42), 0, 0, TAU); c.fill(); c.restore();
+    const bx = W / 2 - (5 * (L.cw + 6) - 6) / 2; for (let k = 0; k < 5; k++) { const cd = st.board[k]; if (cd) CD.draw(c, bx + k * (L.cw + 6), L.boardY, L.cw, L.ch, cd, true); else { c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 2; rrect(c, bx + k * (L.cw + 6), L.boardY, L.cw, L.ch, 8); c.stroke(); } }
+    { const tight = L.seats[L.vs] && L.seats[L.vs][1] - 46 < L.boardY + L.ch + 24; CD.label(c, 'Pot ' + this.pot(), tight ? bx - 48 : W / 2, tight ? L.boardY + L.ch / 2 : L.boardY + L.ch + 16, 15, '#ffd166'); }
+    for (let i = 0; i < this.n; i++) {
+      const [x, y] = L.seats[i], h = st.hole[i], act = st.turn === i && st.phase === 'bet' && !this.s.over, me = i === L.vs, up = h && (this.faceUp(i) && i < 2 || st.show && this.inHand(i));
+      if (h) h.forEach((cd, k) => CD.draw(c, x - L.cw - 2 + k * (L.cw + 4), y, L.cw, L.ch, cd, up, { dim: st.folded[i] }));
+      const ly = me ? y - 14 : y + L.ch + 14; CD.label(c, P[i].name.split(' ')[0] + ' · ' + st.chips[i] + (h ? '' : ' (out)'), x, ly, 13, act ? '#ffd166' : '#fff');
+      const tag = st.last[i] + (st.bet[i] ? ' · ' + st.bet[i] : ''); if (tag) CD.label(c, tag, x, me ? ly - 16 : ly + 16, 12, st.folded[i] ? '#ff8fab' : '#bfe');
+      if (st.dealer === i) { c.fillStyle = '#fff'; c.beginPath(); c.arc(x + L.cw + 14, y + 10, 10, 0, TAU); c.fill(); CD.label(c, 'D', x + L.cw + 14, y + 10, 11, '#12355b'); }
+      if (st.show && this.handNames && this.handNames[i] != null && this.inHand(i)) CD.label(c, PK_HN[pkCat(this.handNames[i])], x, me ? y + L.ch + 12 : y - 10, 12, '#ffd166');
+      if (act) { c.strokeStyle = PK_COL[i]; c.lineWidth = 3; rrect(c, x - L.cw - 8, y - 6, L.cw * 2 + 16, L.ch + 12, 10); c.stroke(); }
+    }
+    if (!st.show && this.faceUp(L.vs) && st.hole[L.vs] && st.board.length >= 3 && !st.folded[L.vs]) CD.label(c, 'You have: ' + PK_HN[pkCat(pkEval(st.hole[L.vs].concat(st.board)))].toLowerCase(), W / 2, L.by - 34, 12, '#bfe');
+    for (const t of this.targets()) { this.drawBtn(c, t, t.lab, t.id === 'fold' ? '#6d7880' : t.id === 'call' ? '#1d9bb5' : '#ff6f59'); if (f && f.id === t.id && BR.showCursor()) BR.drawCursor(c, t.x - 4, t.y - 4, t.w + 8, t.h + 8, this.t); }
+    if (!this.humanTurn()) CD.label(c, this.log, W / 2, L.boardY - 16, 13);
+    this.drawFx(c); this.drawBanner(c, W, H);
+  }
+  testPick() { const tg = this.legalTargets(); const c = tg.find(t => t.id === 'call'); if (c && Math.random() < .75) return c; return tg.length ? pick(tg) : null; }
+  testInfo() { return Object.assign(super.testInfo(), { hand: this.st.handNo, phase: this.st.phase, chips: this.st.chips.slice(), n: this.n }); }
+}
+BR.registerGame({
+  id: 'poker', name: 'Poker', tag: 'Texas Hold\u2019em: heads-up, or up to four at the table.', color: '#9b2335', wave: 5,
+  options: [{ id: 'players', label: 'Players', choices: [[2, '2 (heads-up)'], [3, '3 (+1 AI rival)'], [4, '4 (+2 AI rivals)']], def: 0 }, { id: 'hands', label: 'Length', choices: [[10, '10 hands'], [20, '20 hands'], [40, '40 hands']], def: 1 }],
+  localNote: 'Pass and play: hole cards hide behind a "Pass to…" cover whenever the device changes hands. Extra seats are AI rivals.',
+  howTo: ['Texas Hold\u2019em. Everyone starts with 200 chips. Each hand you get two secret cards; five shared cards come out in the middle (flop, turn, river).', 'Make the best five-card hand from your two cards and the five shared ones. From best: straight flush, four of a kind, full house, flush, straight, three of a kind, two pair, pair, high card.', 'On your turn: fold (give up), check or call (match the bet), or raise. Blinds go up every 8 hands to keep things moving.', 'The game ends when Player 1 or 2 runs out of chips, or after the last hand: whoever of the two has more chips wins.'],
+  controls: { pad: 'Left/right picks Fold, Call/Check or a raise; A acts. Each player can use their own controller.', key: 'Arrows choose, Enter acts.', touch: 'Tap Fold, Call/Check, or a raise button.' },
+  icon(c, x, y, s) { CD.draw(c, x - s * .62, y - s * .48, s * .6, s * .85, { r: 1, s: 0 }, true); CD.draw(c, x - s * .1, y - s * .4, s * .6, s * .85, { r: 1, s: 1 }, true); c.fillStyle = '#ff6f59'; c.beginPath(); c.arc(x + s * .55, y + s * .45, s * .2, 0, TAU); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 2; c.stroke(); },
+  create: s => new Poker(s)
+});
+/* ================= Bowling (10 frames, real scoring, pin physics) ================= */
+const BW = { HALF: .533, RB: .109, RP: .061, RPD: .1, HEAD: 18.29, S: .3048, DZ: .264, HOOK: 1.15, MB: 7, MP: 1.5 };
+BW.PINS = (() => { const p = []; for (let r = 0; r < 4; r++) for (let k = 0; k <= r; k++) p.push([(k - r / 2) * BW.S, BW.HEAD + r * BW.DZ]); return p; })();
+BW.END = BW.HEAD + 3 * BW.DZ + .4;
+function bwNew(stand, x0, ang, v, spin) { return { b: { x: x0, z: 0, vx: Math.sin(ang) * v, vz: Math.cos(ang) * v, spin, gut: false, hit: false }, pins: BW.PINS.map((q, i) => ({ x: q[0], z: q[1], vx: 0, vz: 0, up: stand[i], down: false, gone: !stand[i] })), t: 0, done: false }; }
+function bwCol(a, ra, ma, b2, rb, mb, e) {
+  const dx = b2.x - a.x, dz = b2.z - a.z, d = Math.hypot(dx, dz), R = ra + rb; if (d >= R || d < 1e-6) return false; const nx = dx / d, nz = dz / d, vr = (a.vx - b2.vx) * nx + (a.vz - b2.vz) * nz;
+  const ov = R - d, ia = 1 / ma, ib = 1 / mb; a.x -= nx * ov * ia / (ia + ib); a.z -= nz * ov * ia / (ia + ib); b2.x += nx * ov * ib / (ia + ib); b2.z += nz * ov * ib / (ia + ib);
+  if (vr <= 0) return true; const j = (1 + e) * vr / (ia + ib); a.vx -= j * ia * nx; a.vz -= j * ia * nz; b2.vx += j * ib * nx; b2.vz += j * ib * nz; return true;
+}
+function bwStep(S, dt) {
+  const b = S.b, P = S.pins; S.t += dt;
+  if (!b.gut) { if (b.z > 9 && !b.hit) b.vx += b.spin * BW.HOOK * dt; b.x += b.vx * dt; b.z += b.vz * dt; if (Math.abs(b.x) > BW.HALF && b.z < BW.HEAD - .3) { b.gut = true; b.x = Math.sign(b.x) * (BW.HALF + .08); b.vx = 0; } }
+  else b.z += b.vz * dt;
+  for (const p of P) { if (p.gone) continue; if (p.down) { p.x += p.vx * dt; p.z += p.vz * dt; const sp = Math.hypot(p.vx, p.vz); if (sp > 0) { const k = Math.max(0, sp - 1.3 * dt) / sp; p.vx *= k; p.vz *= k; } if (Math.abs(p.x) > BW.HALF + .2 || p.z > BW.END + .3) p.gone = true; } }
+  if (!b.gut && b.z > BW.HEAD - .5 && b.z < BW.END + .3) for (const p of P) { if (p.gone) continue; if (bwCol(b, BW.RB, BW.MB, p, p.down ? BW.RPD : BW.RP, BW.MP, .55)) { b.hit = true; if (!p.down) p.down = true; } }
+  for (let i = 0; i < 10; i++) { const p = P[i]; if (p.gone || !p.down) continue; for (let j = 0; j < 10; j++) { if (i === j) continue; const q = P[j]; if (q.gone) continue; if (bwCol(p, BW.RPD, 1, q, q.down ? BW.RPD : BW.RP, 1, .8)) { if (!q.down) { q.down = true; } } } }
+  const moving = P.some(p => !p.gone && p.down && Math.hypot(p.vx, p.vz) > .05); if ((b.z > BW.END + .6) && !moving) S.done = true; if (S.t > 9) S.done = true;
+  return S;
+}
+function bwRun(S) { while (!S.done) bwStep(S, 1 / 500); return S; }
+/* plan a straight-ish shot that crosses target x at the head pin, with hook added for spin */
+function bwPlan(x0, tx, v, spin) { const th = (BW.HEAD - 9) / v, disp = .5 * spin * BW.HOOK * th * th; return Math.atan((tx - x0 - disp) / BW.HEAD); }
+/* standard ten-pin scoring: returns cumulative totals per frame (null = not yet known) */
+function bwScore(rolls, nf) {
+  nf = nf || 10; const out = []; let i = 0, tot = 0;
+  for (let f = 0; f < nf; f++) {
+    if (i >= rolls.length) { out.push(null); continue; }
+    if (f === nf - 1) { const r = rolls.slice(i); const need = r[0] === 10 || (r[0] + (r[1] || 0) === 10 && r.length >= 2) ? 3 : 2; if (r.length < need) { out.push(null); i = rolls.length; continue; } tot += r.slice(0, need).reduce((a, b) => a + b, 0); out.push(tot); i += need; continue; }
+    if (rolls[i] === 10) { if (rolls.length < i + 3) { out.push(null); i++; continue; } tot += 10 + rolls[i + 1] + rolls[i + 2]; out.push(tot); i++; continue; }
+    if (rolls.length < i + 2) { out.push(null); i += 2; continue; }
+    if (rolls[i] + rolls[i + 1] === 10) { if (rolls.length < i + 3) { out.push(null); i += 2; continue; } tot += 10 + rolls[i + 2]; } else tot += rolls[i] + rolls[i + 1]; out.push(tot); i += 2;
+  }
+  return out;
+}
+/*__GAME__*/
+const BW_SPIN = ['Hook left', 'Straight', 'Hook right'];
+class Bowling {
+  constructor(s) {
+    this.s = s; this.t = 0; this.k = BR.turnKit(s); this.nf = parseInt(s.opts.frames, 10) || 10;
+    this.rolls = [[], []]; this.fr = [[], []]; this.p = 0; this.f = 0; this.stand = Array(10).fill(true); this.lying = [];
+    this.phase = 'aim'; this.x0 = .2; this.ang = 0; this.spin = 0; this.pow = 0; this.charging = false; this.camZ = -.6; this.sim = null; this.pause = 0; this.flash = null; this.swipe = null; this.prevA = false; this.fx = [];
+    this.fr[0][0] = []; this.fr[1][0] = [];
+  }
+  resize(W, H) {
+    this.W = W; this.H = H; const top = BR.HUD_H + 4; this.sbY = top; this.sbH = 58; const hy0 = top + this.sbH + 8, fe = 8 / (BW.END + 1 + .6 + 8); this.nearY = H - 26; this.mk = hy0; this.hy = (hy0 + 34 - this.nearY * fe) / (1 - fe);
+    this.K = Math.min(W * .86, (this.nearY - this.hy) * 1.05) / (2 * BW.HALF + .5); this.cx = W / 2;
+  }
+  fz(z) { return 8 / Math.max(.3, z - this.camZ + 8); }
+  pj(x, z) { const f = this.fz(z); return [this.cx + x * this.K * f, this.hy + (this.nearY - this.hy) * f, f]; }
+  humanTurn() { return !this.s.over && this.phase === 'aim' && this.pause <= 0 && this.s.players[this.p].human; }
+  total(p) { const sc = bwScore(this.rolls[p], this.nf); let t = 0; for (const v of sc) if (v != null) t = v; return t; }
+  /* best noise-free target for the pins left standing */
+  bestTx(spin, v) {
+    const st = this.stand; if (st.every(Boolean)) return spin < 0 ? .065 : spin > 0 ? -.065 : .065;
+    let best = null, bn = -1; const cs = BW.PINS.filter((q, i) => st[i]), cxm = cs.reduce((a, q) => a + q[0], 0) / (cs.length || 1);
+    for (let tx = -.46; tx <= .461; tx += .023) { const x0 = this.aiX0(tx, spin), R = bwRun(bwNew(st, x0, bwPlan(x0, tx, v, spin), v, spin)); const n = R.pins.filter((p, i) => st[i] && (p.down || p.gone)).length; if (n > bn || n === bn && Math.abs(tx - cxm) < Math.abs(best - cxm)) { bn = n; best = tx; } }
+    return best;
+  }
+  aiX0(tx, spin) { return clamp(spin < 0 ? tx + .2 : spin > 0 ? tx - .2 : tx * .5 + .08, -.4, .4); }
+  plan(diff) {
+    const full = this.stand.every(Boolean), spin = full ? ({ easy: 0, medium: -.35, hard: -.65 }[diff] ?? -.35) : 0, v = { easy: 6.6, medium: 7.3, hard: 7.8 }[diff] || 7.3, sg = (full ? { easy: .26, medium: .12, hard: .035 } : { easy: .2, medium: .085, hard: .03 })[diff] || .06;
+    const tx = this.bestTx(spin, v) + gauss() * sg, x0 = this.aiX0(tx, spin), vv = v + gauss() * .25; return { x0, ang: bwPlan(x0, tx, vv, spin), v: vv, spin };
+  }
+  throwBall(x0, ang, v, spin) {
+    this.x0 = x0; this.ang = ang; this.spin = spin; this.sim = bwNew(this.stand, x0, ang, clamp(v, 4.5, 10), spin); this.phase = 'roll'; this.charging = false; this.pow = 0; Snd.play('roll');
+    if (this.s.fast) { bwRun(this.sim); this.settle(); }
+  }
+  settle() {
+    const S = this.sim, me = this.p; this.phase = 'show'; const n = S.pins.filter((p, i) => this.stand[i] && (p.down || p.gone)).length;
+    const fr = this.fr[me][this.f], last = this.f === this.nf - 1, first = fr.length === 0 || last && (fr.length === 1 && fr[0] === 10 || fr.length === 2 && (fr[1] === 10 || fr[0] + fr[1] === 10) && !(fr[0] === 10 && fr[1] < 10));
+    let txt = n ? String(n) : (S.b.gut ? 'Gutter ball' : 'Miss'); const all = n > 0 && this.stand.filter(Boolean).length === n;
+    if (all) { txt = first ? 'STRIKE!' : 'Spare!'; Snd.play(first ? 'king' : 'ding'); this.s.rumble(me, 120, .6, .4); if (first) this.s.quip(this.s.players[me].human ? 'bad' : 'good', null, .4); } else Snd.play(n ? 'clack' : 'drop');
+    this.flash = { text: txt, t: 0 }; this.rolls[me].push(n); fr.push(n); this.lying = S.pins.map((p, i) => this.stand[i] && p.down && !p.gone ? { x: p.x, z: p.z, a: Math.atan2(p.vx, p.vz) + i } : null).filter(Boolean);
+    this.stand = this.stand.map((v, i) => v && !S.pins[i].down && !S.pins[i].gone);
+    let done = false, reset = false;
+    if (!last) { if (fr.length === 2 || fr[0] === 10) done = true; }
+    else { if (fr.length === 1) { if (n === 10) reset = true; } else if (fr.length === 2) { if (fr[0] === 10) { if (fr[1] === 10) reset = true; } else if (fr[0] + fr[1] === 10) reset = true; else done = true; } else done = true; }
+    this.pause = this.s.fast ? .02 : 1.5; this.after = { done, reset };
+  }
+  next() {
+    const { done, reset } = this.after; this.after = null; this.sim = null; this.lying = []; this.phase = 'aim'; this.camZ = -.6;
+    if (reset) this.stand = Array(10).fill(true);
+    if (done) { this.stand = Array(10).fill(true); if (this.p === 0) this.p = 1; else { this.p = 0; this.f++; } if (this.f >= this.nf) { this.finish(); return; } this.fr[this.p][this.f] = this.fr[this.p][this.f] || []; }
+    this.x0 = .2; this.ang = 0; this.spin = 0; this.prevA = true;
+  }
+  finish() { const a = this.total(0), b = this.total(1); this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Score ' + a + ' – ' + b + ' after ' + this.nf + ' frames', best: Math.max(a, b) }); }
+  pointer(type, p) {
+    if (!this.W) return;
+    if (type === 'down') {
+      if (!this.humanTurn()) return; const sb = this.spinBtn(); if (sb && p.x >= sb.x && p.x <= sb.x + sb.w && p.y >= sb.y && p.y <= sb.y + sb.h) { this.spin = this.spin >= .5 ? -.7 : this.spin <= -.5 ? 0 : .7; Snd.play('click'); return; }
+      if (p.y < this.mk + (this.nearY - this.mk) * .3) return; this.swipe = { id: p.id, x: p.x, y: p.y, mode: null, pts: [[p.x, p.y, p.ts || now()]] }; return;
+    }
+    const sw = this.swipe; if (!sw || sw.id !== p.id) return;
+    if (type === 'move') { const lx = sw.pts[sw.pts.length - 1][0]; sw.pts.push([p.x, p.y, p.ts || now()]); if (sw.pts.length > 60) sw.pts.splice(1, 1);
+      if (!sw.mode) { if (sw.y - p.y > 22) sw.mode = 'throw'; else if (Math.abs(p.x - sw.x) > 10) sw.mode = 'drag'; }
+      if (sw.mode === 'drag' && this.humanTurn()) this.x0 = clamp(this.x0 + (p.x - lx) / (this.K * this.fz(0)), -.42, .42); return; }
+    if (type === 'up') { this.swipe = null; sw.pts.push([p.x, p.y, p.ts || now()]); if (sw.mode !== 'throw' || !this.humanTurn()) return;
+      const P = sw.pts, L = P[P.length - 1], F = P[0], dy = F[1] - L[1]; if (dy < 40) return; const dx = L[0] - F[0];
+      let w0 = P[0]; for (const q of P) if (L[2] - q[2] <= 150) { w0 = q; break; } const dt = Math.max(.016, (L[2] - w0[2]) / 1000), sp = Math.hypot(L[0] - w0[0], L[1] - w0[1]) / dt / this.H;
+      const M = P[Math.floor(P.length / 2)], a1 = Math.atan2(M[0] - F[0], F[1] - M[1] + .01), a2 = Math.atan2(L[0] - M[0], M[1] - L[1] + .01); let curl = (a2 - a1) * 1.6; if (Math.abs(curl) < .15) curl = 0;
+      this.throwBall(this.x0, clamp(dx / dy * .06, -.075, .075), 5 + clamp(sp, 0, 3) * 1.5, clamp(this.spin + curl, -1, 1)); }
+  }
+  spinBtn() { if (!this.W) return null; const w = 118, h = 36; return { x: 10, y: this.nearY - h - 48, w, h }; }
+  update(dt) {
+    this.t += dt; if (this.flash) { this.flash.t += dt; if (this.flash.t > 1.4) this.flash = null; }
+    if (this.s.over) return;
+    if (this.phase === 'roll' && this.sim) { const n = Math.ceil(dt * 500); for (let i = 0; i < n && !this.sim.done; i++) bwStep(this.sim, dt / n); this.camZ = lerp(this.camZ, clamp(this.sim.b.z - 2.2, -.6, 9), Math.min(1, dt * 4)); if (this.sim.done) this.settle(); return; }
+    if (this.pause > 0) { this.pause -= dt; if (this.pause <= 0 && this.after) this.next(); return; }
+    if (this.phase !== 'aim') return; const P = this.s.players[this.p];
+    if (P.human) {
+      const ctrl = this.s.ctrl(this.p), a = Input.analog(ctrl), K = Input.keys, kk = ctrl.keys;
+      if (!this.charging) { if (Math.abs(a.x) > .15) this.x0 = clamp(this.x0 + a.x * .5 * dt, -.42, .42); if (Math.abs(a.y) > .15) this.ang = clamp(this.ang + a.y * .03 * dt, -.07, .07); }
+      for (const pd of ctrl.pads || []) { if (!pd || !pd.conn) continue; if (Math.abs(pd.ax[2] || 0) > .2) this.ang = clamp(this.ang + pd.ax[2] * .03 * dt, -.07, .07); if (Input.hit(pd, 4)) this.spin = Math.max(-1, this.spin - .5); if (Input.hit(pd, 5)) this.spin = Math.min(1, this.spin + .5); }
+      if ((kk === 'k1' || kk === 'any') && Input.keyHit('KeyQ')) this.spin = Math.max(-1, this.spin - .5); if ((kk === 'k1' || kk === 'any') && Input.keyHit('KeyE')) this.spin = Math.min(1, this.spin + .5);
+      if ((kk === 'k2' || kk === 'any') && Input.keyHit('Comma')) this.spin = Math.max(-1, this.spin - .5); if ((kk === 'k2' || kk === 'any') && Input.keyHit('Period')) this.spin = Math.min(1, this.spin + .5);
+      if (a.a && !this.prevA) { this.charging = true; this.ct = 0; }
+      if (this.charging) { this.ct += dt; this.pow = 1 - Math.abs(1 - (this.ct * 1.4) % 2); if (!a.a) this.throwBall(this.x0, this.ang + gauss() * .0012, 5.2 + this.pow * 4.3, this.spin); }
+      this.prevA = a.a;
+    } else if (!this.k.thinking) this.k.ai(() => this.plan(P.diff), pl => { if (this.s.over || this.phase !== 'aim') return; this.throwBall(pl.x0, pl.ang, pl.v, pl.spin); }, 700);
+  }
+  hud() { return { score: [this.total(0), this.total(1)], turn: this.s.over ? -1 : this.p, status: this.s.over ? 'Game over' : 'Frame ' + Math.min(this.f + 1, this.nf) + '/' + this.nf + ' · ball ' + ((this.fr[this.p][this.f] || []).length + 1) }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); return L === 'pad' ? 'Stick moves · right stick aims · LB/RB spin · hold Ⓐ, let go to bowl' : L === 'key' ? '←→ move · ↑↓ aim · Q/E spin · hold Space, let go to bowl' : 'Drag sideways to move · swipe up to bowl (curve it for spin)'; }
+  marks(p, f) {
+    const r = this.fr[p][f] || [], last = f === this.nf - 1, out = [];
+    if (!last) { if (r[0] === 10) return ['', 'X']; if (r.length) out.push(r[0] ? String(r[0]) : '-'); if (r.length > 1) out.push(r[0] + r[1] === 10 ? '/' : r[1] ? String(r[1]) : '-'); return out; }
+    for (let i = 0; i < r.length; i++) { const prev = i ? r[i - 1] : null, open = i === 0 || prev === 10 || (i === 2 && r[0] + r[1] === 10 && r[0] !== 10); out.push(r[i] === 10 && open ? 'X' : !open && prev + r[i] === 10 ? '/' : r[i] ? String(r[i]) : '-'); }
+    return out;
+  }
+  drawPin(c, x, z, lying, ang) {
+    const [px, py, f] = this.pj(x, z), h = .38 * this.K * f * .62, w = .12 * this.K * f;
+    c.save(); c.translate(px, py);
+    if (lying) { c.rotate(ang); c.fillStyle = '#eee'; rrect(c, -w * .5, -h * .45, w, h * .9, w * .5); c.fill(); c.fillStyle = '#e8443a'; c.fillRect(-w * .5, -h * .2, w, h * .08); c.restore(); return; }
+    c.fillStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.ellipse(0, 0, w * .6, w * .22, 0, 0, TAU); c.fill();
+    const g = c.createLinearGradient(-w / 2, 0, w / 2, 0); g.addColorStop(0, '#d8d8d8'); g.addColorStop(.4, '#fff'); g.addColorStop(1, '#bdbdbd'); c.fillStyle = g;
+    c.beginPath(); c.moveTo(-w * .28, 0); c.bezierCurveTo(-w * .62, -h * .35, -w * .2, -h * .55, -w * .2, -h * .7); c.bezierCurveTo(-w * .32, -h * .85, -w * .25, -h, 0, -h); c.bezierCurveTo(w * .25, -h, w * .32, -h * .85, w * .2, -h * .7); c.bezierCurveTo(w * .2, -h * .55, w * .62, -h * .35, w * .28, 0); c.closePath(); c.fill();
+    c.fillStyle = '#e8443a'; c.fillRect(-w * .21, -h * .72, w * .42, h * .05); c.fillRect(-w * .22, -h * .64, w * .44, h * .04); c.restore();
+  }
+  draw(c, W, H) {
+    if (!this.K || this.W !== W || this.H !== H) this.resize(W, H); BR.tableBG(c, W, H, '#5a3a6e', '#1b1030');
+    const HF = BW.HALF, G = .24, zf = BW.END + .35, zn = this.camZ, P4 = (x0, x1, z0, z1, col) => { const a = this.pj(x0, z0), b = this.pj(x1, z0), d = this.pj(x1, z1), e = this.pj(x0, z1); c.fillStyle = col; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.lineTo(d[0], d[1]); c.lineTo(e[0], e[1]); c.closePath(); c.fill(); };
+    P4(-HF - G - .1, HF + G + .1, zn, zf + 1, '#2a1c3a');
+    P4(-HF - G, -HF, zn, zf, '#3a3f4a'); P4(HF, HF + G, zn, zf, '#3a3f4a');
+    P4(-HF, HF, Math.max(zn, 0), zf, '#d9a066'); if (zn < 0) P4(-HF, HF, zn, 0, '#e8c48e');
+    c.strokeStyle = 'rgba(120,70,30,.28)'; c.lineWidth = 1; for (let b = 1; b < 39; b++) { const x = -HF + b * 2 * HF / 39, a = this.pj(x, Math.max(zn, 0)), e = this.pj(x, zf); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(e[0], e[1]); c.stroke(); }
+    const fl = this.pj(-HF, 0), fr2 = this.pj(HF, 0); if (zn < .1) { c.strokeStyle = '#7a1f1f'; c.lineWidth = 3; c.beginPath(); c.moveTo(fl[0], fl[1]); c.lineTo(fr2[0], fr2[1]); c.stroke(); }
+    c.fillStyle = '#5b2a12'; for (let k = -3; k <= 3; k++) { const x = k * 5 * 2 * HF / 39, z = 4.57 + Math.abs(k) * .3, a = this.pj(x, z), s2 = .05 * this.K * a[2]; c.beginPath(); c.moveTo(a[0], a[1] - s2 * 2.2); c.lineTo(a[0] - s2, a[1]); c.lineTo(a[0] + s2, a[1]); c.closePath(); c.fill(); }
+    P4(-HF, HF, BW.HEAD - .5, zf, '#e9b97a');
+    const bk = this.pj(0, zf + 1), mk = this.mk; c.fillStyle = '#14324f'; c.fillRect(0, mk - 4, W, Math.max(0, bk[1] - mk + 4)); c.fillStyle = '#ffd166'; c.font = '900 ' + Math.round(clamp(this.K * bk[2] * .16, 10, 26)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; if (bk[1] - mk > 44) c.fillText('BOARDWALK LANES', W / 2, (mk + bk[1]) / 2);
+    /* pins and ball, far to near */
+    const items = []; const S = this.sim;
+    if (S) S.pins.forEach((p, i) => { if (!p.gone && (this.stand[i] || p.down)) items.push({ z: p.z, d: () => this.drawPin(c, p.x, p.z, p.down, Math.atan2(p.vx, p.vz) + i) }); });
+    else { this.stand.forEach((v, i) => { if (v) items.push({ z: BW.PINS[i][1], d: () => this.drawPin(c, BW.PINS[i][0], BW.PINS[i][1], false) }); }); for (const l of this.lying) items.push({ z: l.z, d: () => this.drawPin(c, l.x, l.z, true, l.a) }); }
+    const bx = S ? S.b.x : this.x0, bz = S ? S.b.z : 0; if (!(S && S.b.z > zf)) items.push({ z: bz, d: () => { const [px, py, f] = this.pj(bx, bz), r = BW.RB * this.K * f; const g = c.createRadialGradient(px - r * .35, py - r * 1.35, r * .1, px, py - r, r); g.addColorStop(0, '#fff'); g.addColorStop(.25, BR.PCOL[this.p]); g.addColorStop(1, '#0b1a2a'); c.fillStyle = g; c.beginPath(); c.arc(px, py - r, r, 0, TAU); c.fill(); } });
+    items.sort((a, b) => b.z - a.z).forEach(o => o.d());
+    if (this.humanTurn() || (this.phase === 'aim' && this.pause <= 0 && !this.s.players[this.p].human)) {
+      if (this.humanTurn()) { c.setLineDash([6, 6]); c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = 2; c.beginPath(); let x = this.x0, z = 0, vx = Math.sin(this.ang) * 7.3, vz = Math.cos(this.ang) * 7.3; let q = this.pj(x, z); c.moveTo(q[0], q[1]); for (let i = 0; i < 40 && z < BW.HEAD; i++) { const d = .07; if (z > 9) vx += this.spin * BW.HOOK * d; x += vx * d; z += vz * d; q = this.pj(clamp(x, -HF - .1, HF + .1), z); c.lineTo(q[0], q[1]); } c.stroke(); c.setLineDash([]);
+        if (BR.inputLabel() === 'touch') { const sb = this.spinBtn(); PickGame.prototype.drawBtn.call(this, c, sb, 'Spin: ' + BW_SPIN[this.spin < -.3 ? 0 : this.spin > .3 ? 2 : 1], '#8e5cc4'); }
+        else CD.label(c, 'Spin: ' + BW_SPIN[this.spin < -.3 ? 0 : this.spin > .3 ? 2 : 1], 70, this.nearY - 62, 13); }
+      if (this.charging) { const mx = W - 34, my = this.nearY - 150; c.fillStyle = 'rgba(0,0,0,.45)'; rrect(c, mx, my, 20, 140, 8); c.fill(); c.fillStyle = this.pow > .85 ? '#e8443a' : '#ffd166'; rrect(c, mx + 3, my + 137 - 134 * this.pow, 14, 134 * this.pow, 6); c.fill(); }
+    }
+    /* scoreboard */
+    const nf = this.nf, x0 = 8, nw = Math.min(70, W * .16), tw = 40, cw = (W - 16 - nw - tw) / (nf + .5), rh = 27;
+    for (let p = 0; p < 2; p++) { const y = this.sbY + p * (rh + 2); c.fillStyle = p === this.p && !this.s.over ? 'rgba(255,209,102,.25)' : 'rgba(0,0,0,.35)'; rrect(c, x0, y, W - 16, rh, 6); c.fill();
+      c.save(); c.beginPath(); c.rect(x0, y, nw - 4, rh); c.clip(); CD.label(c, this.s.players[p].name.split(' ')[0], x0 + nw / 2, y + rh / 2, 11); c.restore();
+      const sc = bwScore(this.rolls[p], nf);
+      for (let f = 0; f < nf; f++) { const w = f === nf - 1 ? cw * 1.5 : cw, x = x0 + nw + f * cw; c.strokeStyle = 'rgba(255,255,255,.25)'; c.strokeRect(x, y + 1, w, rh - 2); const m = this.marks(p, f), mw = w / 3;
+        m.forEach((t, i) => { const n = f === nf - 1 ? 3 : 2; CD.label(c, t, x + w - (n - i - .5) * Math.min(mw, w / n) - (f === nf - 1 ? 0 : 0), y + 8, 10, t === 'X' || t === '/' ? '#ffd166' : '#fff'); });
+        if (sc[f] != null) CD.label(c, String(sc[f]), x + w / 2, y + 20, 11); }
+      CD.label(c, String(this.total(p)), W - 8 - tw / 2, y + rh / 2, 14, '#ffd166'); }
+    /* pin diagram */
+    const dr = Math.max(3, Math.min(6, W * .012)), dx0 = W - 14 - dr * 8, dy0 = this.mk + 10 + dr * 7; for (let i = 0; i < 10; i++) { const q = BW.PINS[i], px = dx0 + q[0] / BW.S * dr * 2.6, py = dy0 - (q[1] - BW.HEAD) / BW.DZ * dr * 2.2; c.fillStyle = this.stand[i] ? '#fff' : 'rgba(255,255,255,.2)'; c.beginPath(); c.arc(px, py, dr, 0, TAU); c.fill(); }
+    if (this.flash) { c.save(); c.globalAlpha = Math.max(0, 1 - this.flash.t / 1.4); c.font = '900 ' + Math.round(Math.min(W * .09, 52)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineWidth = 7; c.strokeStyle = '#12355b'; const y = this.mk + (this.nearY - this.mk) * .5; c.strokeText(this.flash.text, W / 2, y); c.fillStyle = '#ffd166'; c.fillText(this.flash.text, W / 2, y); c.restore(); }
+  }
+  destroy() { this.k.clear(); }
+  testInfo() {
+    const human = this.humanTurn(); let swipe = null;
+    if (human && this.W) { const tx = this.bestTx(0, 7.3), a = bwPlan(this.x0, tx, 7.3, 0), [bx, by] = this.pj(this.x0, 0), dy = this.H * .3; swipe = [bx, by - 10, bx + dy * a / .06, by - 10 - dy]; }
+    return { over: this.s.over, human, turn: this.p, phase: this.phase, frame: this.f, rolls: this.rolls.map(r => r.slice()), totals: [this.total(0), this.total(1)], swipe, spin: this.spin, pause: this.pause };
+  }
+}
+BR.bowlScore = bwScore;
+BR.registerGame({
+  id: 'bowling', name: 'Bowling', tag: 'Ten frames, ten pins, real scoring.', color: '#8e5cc4', wave: 5,
+  options: [{ id: 'frames', label: 'Frames', choices: [['10', '10 (full game)'], ['5', '5'], ['3', '3']], def: 0 }],
+  howTo: ['Take turns bowling a frame each. Knock down all ten pins with the first ball for a strike (X), or with both balls for a spare (/).', 'Scoring is the real thing: a strike scores 10 plus your next two balls, a spare 10 plus your next ball. A perfect game is 300.', 'In the last frame, a strike or spare earns bonus balls (up to three balls).', 'Aim for the pocket, just beside the head pin. Spin hooks the ball late in the lane, which carries more pins. Highest score wins.'],
+  controls: { pad: 'Left stick moves the ball (up/down or right stick turns the aim), LB/RB set spin, hold A and let go to bowl: the meter sets the speed.', key: 'Left/right moves, up/down turns the aim, Q/E (or , and .) set spin, hold Space (or Enter) and let go to bowl.', touch: 'Drag sideways to line up, then swipe up the lane to bowl. Swipe faster for speed, curve the swipe (or tap Spin) to hook it.' },
+  icon(c, x, y, s) { c.fillStyle = '#2b6cb0'; c.beginPath(); c.arc(x - s * .2, y + s * .15, s * .28, 0, TAU); c.fill(); c.fillStyle = '#0b1a2a'; [[-.27, .05], [-.16, .02], [-.2, .13]].forEach(([a, b]) => { c.beginPath(); c.arc(x + a * s, y + b * s, s * .04, 0, TAU); c.fill(); });
+    c.fillStyle = '#fff'; c.beginPath(); c.ellipse(x + s * .28, y - s * .05, s * .11, s * .3, 0, 0, TAU); c.fill(); c.beginPath(); c.arc(x + s * .28, y - s * .38, s * .07, 0, TAU); c.fill(); c.fillStyle = '#e8443a'; c.fillRect(x + s * .2, y - s * .3, s * .16, s * .04); },
+  create: s => new Bowling(s)
+});
+
+/* ================= Pinball Duel (alternating balls, one table) ================= */
+const PB = { R: .022, G: 2.2, VMAX: 5, FL: .15, FR: .017, REST: .5, UP: -.45, W: .92 };
+function pbTable() {
+  const segs = [], S = (ax, ay, bx, by, o) => segs.push(Object.assign({ ax, ay, bx, by, e: .45 }, o || {}));
+  let px = 0, py = .5; for (let i = 1; i <= 28; i++) { const a = Math.PI - Math.PI * i / 28, x = .5 + .5 * Math.cos(a), y = .5 - .5 * Math.sin(a); S(px, py, x, y); px = x; py = y; }
+  S(0, .5, 0, 1.35); S(1, .5, 1, 1.85); S(.92, .58, .92, 1.85, { lane: 1 }); S(.92, .58, 1, .5, { gate: 1 });
+  S(0, 1.35, .27, 1.6); S(.92, 1.35, .65, 1.6);
+  S(.1, 1.2, .1, 1.348, { e: .3 }); S(.82, 1.2, .82, 1.348, { e: .3 }); S(.1, 1.348, .23, 1.457, { e: .3 }); S(.82, 1.348, .69, 1.457, { e: .3 });
+  S(.1, 1.2, .23, 1.457, { kick: 1 }); S(.82, 1.2, .69, 1.457, { kick: 1 });
+  S(.3, .08, .3, .2, { e: .3 }); S(.62, .08, .62, .2, { e: .3 });
+  return segs;
+}
+class Pinball {
+  constructor(s) {
+    this.s = s; this.t = 0; this.k = BR.turnKit(s); this.nb = parseInt(s.opts.balls, 10) || 3; this.segs = pbTable();
+    this.bump = [[.3, .58], [.62, .58], [.46, .8]].map(([x, y]) => ({ x, y, r: .055, lit: 0 }));
+    this.tg = [.37, .46, .55].map(x => ({ x, y: .4, up: true })); this.ro = [[.2, .14], [.46, .05], [.72, .14]].map(([x, y]) => ({ x, y, on: false }));
+    this.fl = [{ x: .27, y: 1.6, s: 1, a: PB.REST, w: 0, held: false }, { x: .65, y: 1.6, s: -1, a: PB.REST, w: 0, held: false }];
+    this.score = [0, 0]; this.p = 0; this.ballNo = [1, 0]; this.mult = 1; this.balls = []; this.fx = []; this.msg = null; this.pause = 0; this.aiF = [{ hold: 0, cool: 0 }, { hold: 0, cool: 0 }]; this.ptr = new Map();
+    this.newBall();
+  }
+  newBall() { this.balls = [{ x: .96, y: 1.7, vx: 0, vy: 0, lane: true, still: 0 }]; this.waiting = true; this.charge = null; this.bt = 0; this.saved = false; this.mult = 1; this.ro.forEach(r => r.on = false); this.tg.forEach(t => t.up = true); this.retg = 0; }
+  resize(W, H) { this.W = W; this.H = H; const top = BR.HUD_H + 6; this.side = W > H * 1.05; const avH = H - top - 10, avW = this.side ? W - 220 : W - 20; this.S = Math.min(avW, avH / 1.85); this.ox = this.side ? (W - 200 - this.S) / 2 : (W - this.S) / 2; this.oy = top + (avH - this.S * 1.85) / 2; }
+  ts(x, y) { return [this.ox + x * this.S, this.oy + y * this.S]; }
+  humanTurn() { return !this.s.over && this.pause <= 0 && this.s.players[this.p].human; }
+  add(n, x, y) { const v = n * this.mult; this.score[this.p] += v; if (x != null) this.fx.push({ x, y, t: 0, txt: '+' + v }); }
+  launch(pow) { const b = this.balls.find(b => b.lane && b.vy === 0 && b.y > 1.6); if (!b) return; b.vy = -(2.9 + clamp(pow, 0, 1) * 1.4); this.waiting = false; this.charge = null; this.bt = 0; Snd.play('whoosh'); }
+  flipSet(i, on) { const f = this.fl[i]; if (on && !f.held) Snd.play('clack'); f.held = on; }
+  collideSeg(b, ax, ay, bx, by, rad, vsx, vsy) {
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy, t = clamp(((b.x - ax) * dx + (b.y - ay) * dy) / L2, 0, 1), cx = ax + t * dx, cy = ay + t * dy, ex = b.x - cx, ey = b.y - cy, d = Math.hypot(ex, ey), R = PB.R + rad;
+    if (d >= R || d < 1e-7) return null; const nx = ex / d, ny = ey / d; b.x = cx + nx * R; b.y = cy + ny * R; const rx = b.vx - (vsx || 0), ry = b.vy - (vsy || 0), vn = rx * nx + ry * ny; return { nx, ny, vn, t };
+  }
+  bounce(b, h, e) { if (h.vn < 0) { b.vx -= (1 + e) * h.vn * h.nx; b.vy -= (1 + e) * h.vn * h.ny; } }
+  step(dt) {
+    for (const f of this.fl) { const tgt = f.held ? PB.UP : PB.REST, sp = f.held ? 26 : 14, old = f.a; f.a = tgt < f.a ? Math.max(tgt, f.a - sp * dt) : Math.min(tgt, f.a + sp * dt); f.w = (f.a - old) / dt; }
+    for (const b of this.balls) {
+      b.vy += PB.G * dt; const sp = Math.hypot(b.vx, b.vy); if (sp > PB.VMAX) { b.vx *= PB.VMAX / sp; b.vy *= PB.VMAX / sp; } b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.lane && b.y < .5) b.lane = false;
+      if (b.lane && b.y > 1.7 && b.vy >= 0 && this.waiting) { b.y = 1.7; b.vy = 0; b.vx = 0; }
+      for (const g of this.segs) { if (g.gate && b.lane) continue; const h = this.collideSeg(b, g.ax, g.ay, g.bx, g.by, .006); if (!h) continue; if (g.kick && h.vn < -.3) { const k = 2.1; b.vx += (k - h.vn) * h.nx * .6; b.vy += (k - h.vn) * h.ny * .6; this.add(10, b.x, b.y); Snd.play('thunk'); } else this.bounce(b, h, g.e); }
+      for (const u of this.bump) { const dx = b.x - u.x, dy = b.y - u.y, d = Math.hypot(dx, dy), R = u.r + PB.R; if (d < R && d > 1e-6) { const nx = dx / d, ny = dy / d; b.x = u.x + nx * R; b.y = u.y + ny * R; const vn = b.vx * nx + b.vy * ny; b.vx += (2.2 - vn) * nx; b.vy += (2.2 - vn) * ny; u.lit = .2; this.add(100, u.x, u.y - u.r); Snd.play('ding'); this.s.rumble(this.p, 40, .3, .2); } }
+      for (const t of this.tg) { if (!t.up) continue; const h = this.collideSeg(b, t.x - .03, t.y, t.x + .03, t.y, .008); if (h) { this.bounce(b, h, .4); t.up = false; this.add(250, t.x, t.y); Snd.play('capture'); if (this.tg.every(q => !q.up)) { this.add(1000, .46, .5); this.flash('MULTIBALL!'); Snd.play('king'); if (this.balls.length < 3) this.spawn = true; this.retg = 2; } } }
+      for (const r of this.ro) if (!r.on && Math.hypot(b.x - r.x, b.y - r.y) < .05) { r.on = true; this.add(50); Snd.play('coin'); if (this.ro.every(q => q.on)) { this.mult = Math.min(5, this.mult + 1); this.flash('×' + this.mult + ' SCORE'); this.ro.forEach(q => q.on = false); } }
+      for (const f of this.fl) { const c = Math.cos(f.a), si = Math.sin(f.a), tx = f.x + f.s * c * PB.FL, ty = f.y + si * PB.FL; const h = this.collideSeg(b, f.x, f.y, tx, ty, PB.FR); if (!h) continue; const r = h.t * PB.FL, vsx = r * (-f.s * si) * f.w, vsy = r * c * f.w; const rx = b.vx - vsx, ry = b.vy - vsy, vn = rx * h.nx + ry * h.ny; if (vn < 0) { b.vx -= 1.3 * vn * h.nx; b.vy -= 1.3 * vn * h.ny; } }
+    }
+    if (this.balls.length > 1) for (let i = 0; i < this.balls.length; i++) for (let j = i + 1; j < this.balls.length; j++) { const a = this.balls[i], c = this.balls[j], dx = c.x - a.x, dy = c.y - a.y, d = Math.hypot(dx, dy); if (d < 2 * PB.R && d > 1e-6) { const nx = dx / d, ny = dy / d, ov = (2 * PB.R - d) / 2; a.x -= nx * ov; a.y -= ny * ov; c.x += nx * ov; c.y += ny * ov; const vr = (a.vx - c.vx) * nx + (a.vy - c.vy) * ny; if (vr > 0) { a.vx -= vr * nx; a.vy -= vr * ny; c.vx += vr * nx; c.vy += vr * ny; } } }
+    if (this.spawn) { this.spawn = false; this.balls.push({ x: .46, y: .25, vx: (Math.random() - .5) * .8, vy: .3, lane: false, still: 0 }); }
+    const before = this.balls.length; this.balls = this.balls.filter(b => b.y < 1.88 && b.x > -.1 && b.x < 1.1);
+    if (this.balls.length < before && !this.balls.length) { if (!this.saved && this.bt < 5) { this.saved = true; this.flash('Ball saved!'); this.balls = [{ x: .96, y: 1.7, vx: 0, vy: 0, lane: true, still: 0 }]; this.waiting = true; } else this.ballOver('Drained'); }
+  }
+  flash(t) { this.msg = { text: t, t: 0 }; }
+  ballOver(why) { this.balls = []; Snd.play('drop'); this.flash(why === 'Drained' ? 'Ball over' : why); this.pause = this.s.fast ? .02 : 1.4; this.after = true; }
+  nextBall() {
+    this.after = false; const n = this.ballNo; if (this.p === 0) this.p = 1; else this.p = 0;
+    if (n[this.p] >= this.nb) { const [a, b] = this.score; this.s.end(a > b ? 0 : b > a ? 1 : -1, { detail: 'Score ' + a + ' – ' + b + ' after ' + this.nb + ' ball' + (this.nb > 1 ? 's' : '') + ' each', best: Math.max(a, b) }); return; }
+    n[this.p]++; this.fl.forEach(f => f.held = false); this.newBall();
+  }
+  aiDecide(dt) {
+    const diff = this.s.players[this.p].diff, miss = { easy: .45, medium: .25, hard: .12 }[diff] ?? .25;
+    if (this.waiting) { if (!this.k.thinking) this.k.ai(() => .55 + Math.random() * .45, pw => { if (this.waiting && !this.s.over) this.launch(pw); }, 700); return; }
+    this.fl.forEach((f, i) => { const A = this.aiF[i]; A.cool -= dt; A.hold -= dt; const want = this.wantFlip(i); if (want && A.cool <= 0 && A.hold <= 0) { if (Math.random() < miss) A.cool = .7; else A.hold = .25; } this.flipSet(i, A.hold > 0); });
+  }
+  wantFlip(i, look) { look = look || 0; const f = this.fl[i], tx = f.x + f.s * Math.cos(PB.REST) * PB.FL, ty = f.y + Math.sin(PB.REST) * PB.FL; return this.balls.some(b => { if (b.lane) return false; const lo = Math.min(f.x, tx) - .02, hi = Math.max(f.x, tx) + .02; if (b.x < lo || b.x > hi) return false; const k = (b.x - f.x) / (tx - f.x), ly = f.y + k * (ty - f.y); return b.y > ly - .09 - Math.max(0, b.vy) * look && b.y < ly + .01 && b.vy > -1; }); }
+  pointer(type, p) {
+    if (!this.W) return; if (type === 'up') { const z = this.ptr.get(p.id); this.ptr.delete(p.id); if (z === 'plunge' && this.charge && this.humanTurn()) this.launch(this.charge.p); this.syncTouch(); return; }
+    if (type !== 'down' || !this.humanTurn()) return;
+    if (this.waiting) { this.ptr.set(p.id, 'plunge'); this.charge = { t: 0, p: 0 }; return; }
+    this.ptr.set(p.id, p.x < this.W / 2 ? 'L' : 'R'); this.syncTouch();
+  }
+  syncTouch() { const z = [...this.ptr.values()]; this.tL = z.includes('L'); this.tR = z.includes('R'); }
+  update(dt) {
+    this.t += dt; for (const f of this.fx) f.t += dt; this.fx = this.fx.filter(f => f.t < .8); if (this.msg) { this.msg.t += dt; if (this.msg.t > 1.5) this.msg = null; } this.bump.forEach(u => u.lit = Math.max(0, u.lit - dt));
+    if (this.s.over) return;
+    if (this.pause > 0) { this.pause -= dt; if (this.pause <= 0 && this.after) this.nextBall(); return; }
+    const P = this.s.players[this.p];
+    if (P.human) {
+      const ctrl = this.s.ctrl(this.p), K = Input.keys, kb = !!ctrl.keys; let L = !!this.tL, R = !!this.tR, A = false;
+      if (kb) { if (['ArrowLeft', 'KeyZ', 'ShiftLeft', 'KeyA'].some(k => K.has(k))) L = true; if (['ArrowRight', 'Slash', 'ShiftRight', 'KeyD', 'KeyL'].some(k => K.has(k))) R = true; if (['Space', 'Enter', 'ArrowDown', 'KeyS'].some(k => K.has(k))) A = true; }
+      for (const pd of ctrl.pads || []) { if (!pd || !pd.conn) continue; if (pd.b[4] || pd.b[6] || pd.b[14]) L = true; if (pd.b[5] || pd.b[7] || pd.b[15]) R = true; if (pd.b[0]) A = true; }
+      if (this.waiting) { if (A || this.charge && [...this.ptr.values()].includes('plunge')) { if (!this.charge) this.charge = { t: 0, p: 0 }; this.charge.t += dt; this.charge.p = Math.min(1, this.charge.t / 1.1); } else if (this.charge && this.prevA) this.launch(this.charge.p); }
+      this.prevA = A; if (!this.waiting) { this.flipSet(0, L); this.flipSet(1, R); }
+    } else this.aiDecide(dt);
+    if (this.waiting) { this.step(dt); return; }
+    const reps = this.s.fast && !P.human ? 10 : 1, n = Math.ceil(dt * 480);
+    for (let r = 0; r < reps && !this.after && !this.s.over; r++) { if (!P.human && r) this.aiDecide(dt); for (let i = 0; i < n && !this.after; i++) this.step(dt / n); this.bt += dt; if (this.retg > 0) { this.retg -= dt; if (this.retg <= 0) this.tg.forEach(t => t.up = true); }
+      for (const b of this.balls) { if (Math.hypot(b.vx, b.vy) < .03 && !b.lane) { b.still += dt; if (b.still > (this.fl.some(f => f.held) ? 8 : 3)) { b.vx = (Math.random() - .5) * 1.5; b.vy = -1.2; b.still = 0; } } else b.still = 0; }
+      if (this.bt > 90 && !this.after) this.ballOver('Time!'); }
+  }
+  hud() { return { score: this.score, turn: this.s.over ? -1 : this.p, status: this.s.over ? 'Game over' : 'Ball ' + this.ballNo[this.p] + '/' + this.nb + ' · ×' + this.mult + (this.balls.length > 1 ? ' · multiball' : '') }; }
+  hint() { if (!this.humanTurn()) return ''; const L = BR.inputLabel(); if (this.waiting) return L === 'pad' ? 'Hold Ⓐ and let go to launch' : L === 'key' ? 'Hold Space and let go to launch' : 'Touch and hold, let go to launch'; return L === 'pad' ? 'LB / RB flip' : L === 'key' ? 'Left / Right (or Z and /) flip' : 'Touch the left or right half to flip'; }
+  draw(c, W, H) {
+    if (!this.S || this.W !== W || this.H !== H) this.resize(W, H); BR.tableBG(c, W, H, '#1d3b5c', '#0a1424'); const S = this.S, T = (x, y) => this.ts(x, y);
+    c.save(); c.beginPath(); let q = T(0, 1.85); c.moveTo(q[0], q[1]); q = T(0, .5); c.lineTo(q[0], q[1]); const [cx, cy] = T(.5, .5); c.arc(cx, cy, S * .5, Math.PI, 0); q = T(1, 1.85); c.lineTo(q[0], q[1]); c.closePath();
+    const g = c.createLinearGradient(0, this.oy, 0, this.oy + S * 1.85); g.addColorStop(0, '#2b7a9c'); g.addColorStop(.5, '#1f5f86'); g.addColorStop(1, '#14324f'); c.fillStyle = g; c.fill(); c.clip();
+    c.globalAlpha = .18; c.fillStyle = '#ffd166'; c.beginPath(); const [sx, sy] = T(.46, .95); c.arc(sx, sy, S * .2, 0, TAU); c.fill(); c.globalAlpha = 1;
+    c.fillStyle = '#f3e3c3'; c.font = '900 ' + Math.round(S * .055) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.globalAlpha = .35; c.fillText('BOARDWALK', sx, sy - S * .03); c.fillText('×' + this.mult, sx, sy + S * .05); c.globalAlpha = 1; c.restore();
+    c.lineCap = 'round'; c.strokeStyle = '#f3e3c3'; c.lineWidth = Math.max(2, S * .012);
+    for (const s2 of this.segs) { if (s2.gate && this.balls.some(b => b.lane)) continue; const a = T(s2.ax, s2.ay), b = T(s2.bx, s2.by); c.strokeStyle = s2.kick ? '#ff6f59' : '#f3e3c3'; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); }
+    for (const u of this.bump) { const [x, y] = T(u.x, u.y); c.fillStyle = u.lit > 0 ? '#fff6c8' : '#e8443a'; c.beginPath(); c.arc(x, y, u.r * S, 0, TAU); c.fill(); c.fillStyle = '#ffd166'; c.beginPath(); c.arc(x, y, u.r * S * .55, 0, TAU); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(x, y, u.r * S, 0, TAU); c.stroke(); }
+    for (const t of this.tg) { const [x, y] = T(t.x - .03, t.y - .012); c.fillStyle = t.up ? '#ffd166' : 'rgba(255,209,102,.2)'; rrect(c, x, y, .06 * S, .024 * S, 3); c.fill(); }
+    for (const r of this.ro) { const [x, y] = T(r.x, r.y); c.fillStyle = r.on ? '#7cf29a' : 'rgba(255,255,255,.25)'; c.beginPath(); c.arc(x, y, S * .018, 0, TAU); c.fill(); }
+    for (const f of this.fl) { const a = T(f.x, f.y), b = T(f.x + f.s * Math.cos(f.a) * PB.FL, f.y + Math.sin(f.a) * PB.FL); c.strokeStyle = '#fff'; c.lineWidth = PB.FR * 2 * S + 2; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.strokeStyle = BR.PCOL[this.p]; c.lineWidth = PB.FR * 2 * S - 2; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); }
+    const [px, py] = T(.96, 1.73); c.fillStyle = '#888'; c.fillRect(px - S * .02, py + (this.charge ? this.charge.p * S * .06 : 0), S * .04, S * .1);
+    for (const b of this.balls) { const [x, y] = T(b.x, b.y), r = PB.R * S; const gg = c.createRadialGradient(x - r * .4, y - r * .4, r * .1, x, y, r); gg.addColorStop(0, '#fff'); gg.addColorStop(1, '#8a8f99'); c.fillStyle = gg; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill(); }
+    for (const f of this.fx) { const [x, y] = T(f.x, f.y); c.globalAlpha = Math.max(0, 1 - f.t / .8); CD.label(c, f.txt, x, y - f.t * 30, 12, '#ffd166'); } c.globalAlpha = 1;
+    const P = this.s.players, bx = this.side ? W - 200 : 10, by = this.side ? BR.HUD_H + 110 : this.oy + 6, bw = this.side ? 190 : S * .5;
+    if (this.side) { c.fillStyle = 'rgba(0,0,0,.35)'; rrect(c, bx, by, bw, 120, 12); c.fill(); for (let i = 0; i < 2; i++) CD.label(c, P[i].name.split(' ')[0] + ': ' + this.score[i], bx + bw / 2, by + 22 + i * 26, 15, i === this.p ? '#ffd166' : '#fff'); CD.label(c, 'Ball ' + this.ballNo[this.p] + ' of ' + this.nb, bx + bw / 2, by + 78, 13); CD.label(c, 'Score ×' + this.mult, bx + bw / 2, by + 100, 13); }
+    if (this.charge) { const [x, y] = T(.96, 1.4); c.fillStyle = 'rgba(0,0,0,.5)'; c.fillRect(x - 5, y - S * .2, 10, S * .2); c.fillStyle = '#ffd166'; c.fillRect(x - 4, y - S * .2 * this.charge.p, 8, S * .2 * this.charge.p); }
+    if (this.msg) { c.save(); c.globalAlpha = Math.max(0, 1 - this.msg.t / 1.5); c.font = '900 ' + Math.round(Math.min(S * .1, 42)) + 'px ui-rounded,system-ui,sans-serif'; c.textAlign = 'center'; c.lineWidth = 6; c.strokeStyle = '#12355b'; const [x, y] = T(.46, 1.05); c.strokeText(this.msg.text, x, y); c.fillStyle = '#ffd166'; c.fillText(this.msg.text, x, y); c.restore(); }
+  }
+  destroy() { this.k.clear(); }
+  testInfo() { const human = this.humanTurn(); return { over: this.s.over, human, turn: this.p, waiting: this.waiting, balls: this.balls.map(b => [b.x, b.y, b.vx, b.vy]), wantL: this.wantFlip(0, .12), wantR: this.wantFlip(1, .12), ptL: [this.W * .2, this.H * .8], ptR: [this.W * .8, this.H * .8], score: this.score.slice(), ball: this.ballNo.slice(), pause: this.pause, bt: this.bt }; }
+}
+BR.registerGame({
+  id: 'pinball', name: 'Pinball Duel', tag: 'Flip, bump and multiball: take turns on one table.', color: '#2b9fd0', wave: 5,
+  options: [{ id: 'balls', label: 'Balls each', choices: [['3', '3'], ['1', '1'], ['5', '5']], def: 0 }],
+  howTo: ['Players take turns: each plays one ball, then the other player steps up. Highest total score after all balls wins.', 'Pop bumpers score 100, slingshots 10, each drop target 250. Knock down all three targets for MULTIBALL and a 1,000 bonus.', 'Light all three top lights to raise your score multiplier (up to ×5) for the rest of that ball.', 'Drain in the first five seconds and the ball is saved once. A ball lasts at most 90 seconds.'],
+  controls: { pad: 'LB / RB (or the triggers) flip, hold A and let go to launch.', key: 'Left / Right arrows (or Z and /, or the Shift keys) flip, hold Space and let go to launch.', touch: 'Touch the left or right half of the screen to flip. Touch and hold, then let go, to launch.' },
+  icon(c, x, y, s) { c.fillStyle = '#e8443a'; c.beginPath(); c.arc(x, y - s * .2, s * .16, 0, TAU); c.fill(); c.strokeStyle = '#fff'; c.lineWidth = s * .09; c.lineCap = 'round'; c.beginPath(); c.moveTo(x - s * .42, y + s * .25); c.lineTo(x - s * .1, y + s * .4); c.moveTo(x + s * .42, y + s * .25); c.lineTo(x + s * .1, y + s * .4); c.stroke(); c.fillStyle = '#ccc'; c.beginPath(); c.arc(x + s * .15, y + s * .05, s * .1, 0, TAU); c.fill(); },
+  create: s => new Pinball(s)
+});
 /* ================= Touch assist hooks (Wave 4) =================
    Boards whose cells are smaller than a 44px finger get a magnifier loupe while the finger is down,
    and the tap snaps to the nearest legal target when it is lifted (see y_hub.js ptr/drawLoupe).
@@ -5530,15 +6408,7 @@ function boot() {
   Hub.init(); showTitle();
   requestAnimationFrame(t => { lastT = t; requestAnimationFrame(frame); });
 }
-/* ================= Coming-soon booths (later waves plug in here) ================= */
-[
-  ['mastermind', 'Mastermind', '🔴', '#7b4bb3', 'Crack the secret color code.'],
-  ['trivia', 'Trivia Duel', '❓', '#1d9bb5', 'Buzz in first and answer right.'],
-  ['bowling', 'Bowling', '🎳', '#2f5d8a', 'Strikes, spares and a perfect 300.'],
-  ['blackjack', 'Blackjack', '♠️', '#1d2b3a', 'Hit or stand against the boardwalk dealer.'],
-  ['poker', 'Poker', '♦️', '#9b2335', 'Bluff the rivals out of their tickets.'],
-  ['pinball', 'Pinball Duel', '🕹️', '#ff7aa8', 'Flippers, bumpers, multiball madness.']
-].forEach(g => BR.registerSoon(g[0], g[1], g[2], g[3], g[4], 5 + Math.floor(BR.games.filter(x => !x.live).length / 8)));
+/* ================= Boot: all 40 booths are live ================= */
 boot();
 </script>
 </body></html>
